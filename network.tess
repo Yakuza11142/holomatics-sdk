@@ -1,0 +1,11 @@
+module TesseractUI.Network;
+
+pub type RawSocket {
+    port: scalar,
+
+    pub fn send_binary_packet(data: tensor) {
+        lane(width: 32) {
+            dispatch kernel_socket_write(self.port, data);
+        }
+    }
+}
