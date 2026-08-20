@@ -1,0 +1,14 @@
+module TesseractUI.Particles;
+
+import "core.tess";
+
+pub type ParticleEmitter : Widget {
+    particle_count: scalar,
+    texture: tensor,
+
+    pub fn render(canvas: Canvas) {
+        lane(width: 64) {
+            dispatch gpu_emit_particle_field(self.particle_count, self.texture);
+        }
+    }
+}
