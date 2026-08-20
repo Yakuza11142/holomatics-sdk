@@ -1,0 +1,11 @@
+module TesseractUI.Telemetry;
+
+pub type Profiler {
+    pub static fn get_fps() -> scalar {
+        return System.read_gpu_frame_time();
+    }
+
+    pub static fn get_vram_usage() -> scalar {
+        return System.read_vram_registers();
+    }
+}
