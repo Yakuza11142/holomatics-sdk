@@ -1,0 +1,19 @@
+module TesseractUI.State;
+
+import "core.tess";
+
+pub trait StatefulWidget : Widget {
+    pub fn create_state() -> State;
+}
+
+pub type State {
+    dirty: bool,
+
+    pub fn set_state(updater: fn()) {
+        updater();
+        self.dirty = true;
+        lane(width: 8) {
+            dispatch gpu_mark_dirty_rect();
+        }
+    }
+}
