@@ -1,0 +1,18 @@
+module TesseractUI.Text;
+
+import "core.tess";
+
+pub type TextStyle {
+    fontSize: scalar,
+    color: Color,
+}
+
+pub type Text : Widget {
+    content: string,
+    fontSize: scalar,
+    color: Color,
+
+    pub fn render(canvas: Canvas) {
+        canvas.draw_glyphs(self.content, self.fontSize, self.color);
+    }
+}
