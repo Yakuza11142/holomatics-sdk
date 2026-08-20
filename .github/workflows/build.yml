@@ -1,4 +1,4 @@
-name: Tesseract Engine CI/CD
+Name: Tesseract Engine CI/CD
 
 on:
   push:
@@ -19,7 +19,27 @@ jobs:
       - name: Set up Build Environment
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang
+          sudo apt-get install -y build-essential clang curl git
+
+      - name: Install Tess Compiler Toolchain
+        run: |
+          echo "Setting up tess compiler..."
+          # OPTION 1: Download pre-built tess binary from releases/storage (Uncomment & set your URL)
+          # curl -L -o /usr/local/bin/tess https://github.com/YOUR_USER/YOUR_COMPILER_REPO/releases/download/v1.0.0/tess
+          # chmod +x /usr/local/bin/tess
+
+          # OPTION 2: If compiler source code exists inside this repo (e.g. in compiler/ directory)
+          if [ -d "compiler" ]; then
+            clang++ -O3 compiler/*.cpp -o /usr/local/bin/tess
+            chmod +x /usr/local/bin/tess
+          fi
+
+          # Verify compiler binary is in PATH
+          if ! command -v tess &> /devnull; then
+            echo "CRITICAL ERROR: 'tess' compiler binary not found in system PATH."
+            exit 1
+          fi
+          tess --version || true
 
       - name: Validate Root .tess Architecture
         run: |
@@ -45,18 +65,19 @@ jobs:
           mkdir -p build
           echo "Compiling main.tess entry point..."
           
-          # Run actual tess compiler binary toolchain
+          # Execute native tess compiler
           tess build main.tess --config tess_config.yaml -o build/tesseract_app
           
-          # Verify binary output size (Must be > 1MB)
+          # Verify output size to prevent uploading empty 50-byte text error files
           FILE_SIZE=$(stat -c%s "build/tesseract_app" 2>/devnull || echo 0)
           if [ "$FILE_SIZE" -lt 1000000 ]; then
-            echo "❌ CRITICAL ERROR: Compiler generated invalid or tiny output ($FILE_SIZE bytes)."
+            echo "❌ CRITICAL ERROR: Compiler output is invalid or corrupted ($FILE_SIZE bytes)."
+            cat build/tesseract_app 2>/devnull || true
             exit 1
           fi
           
           chmod +x build/tesseract_app
-          echo "Compilation complete."
+          echo "Compilation complete. Output size: $FILE_SIZE bytes."
 
       - name: Upload Compiled Binary Artifacts
         uses: actions/upload-artifact@v4
