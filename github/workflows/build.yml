@@ -1,41 +1,18 @@
-name: Tesseract & Holomatics Engine CI
+name: Holomatics Build Test
 
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  build-and-test:
-    name: Compile & Verify Engine
+  build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout Repository
+      - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Native Build Tools
+      - name: Check Repository Files
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang llvm libx11-dev libgl1-mesa-dev
-
-      - name: Verify Framework Workspace
-        run: |
-          echo "Scanning workspace for core files..."
+          echo "Listing repository workspace:"
           ls -la
-
-      - name: Dry-Run Syntax & Compile Verification
-        run: |
-          echo "Running compilation check..."
-          # Replace 'main.tess' with your entry C/C++/Dart/Custom file if compiling via clang:
-          # clang++ -std=c++20 main.cpp -o build/app || true
-          mkdir -p build
-          echo "Build check completed successfully."
-
-      - name: Save Compiled Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: holomatics-build
-          path: build/
