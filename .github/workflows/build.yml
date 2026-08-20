@@ -1,4 +1,4 @@
-Name: Tesseract Engine CI/CD
+name: Tesseract Engine CI/CD
 
 on:
   push:
