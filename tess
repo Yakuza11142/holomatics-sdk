@@ -1,0 +1,5 @@
+# Compile with high optimization (-O3) and static linking
+clang++ -O3 -static tess_compiler.cpp -o tess
+
+# Test the binary locally
+./tess --version
