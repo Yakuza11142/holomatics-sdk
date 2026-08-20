@@ -13,6 +13,10 @@ pub import "network.tess";
 pub import "animation.tess";
 pub import "camera.tess";
 pub import "shaders.tess";
+pub import "async.tess";
+pub import "storage.tess";
+pub import "router.tess";
+pub import "telemetry.tess";
 
 pub type TesseractApp {
     pub static fn run(root: Widget) -> int {
