@@ -1,0 +1,15 @@
+module TesseractUI.Assets;
+
+pub type AssetBundle {
+    pub static fn load_mesh(path: string) -> tensor {
+        lane(width: 64) {
+            return dispatch dma_load_mesh_file(path);
+        }
+    }
+
+    pub static fn load_texture(path: string) -> tensor {
+        lane(width: 64) {
+            return dispatch dma_load_texture_file(path);
+        }
+    }
+}
