@@ -1,0 +1,9 @@
+module TesseractUI.Async;
+
+pub type ThreadPool {
+    pub static fn spawn_task(task_fn: fn()) {
+        lane(width: 8) {
+            dispatch kernel_spawn_thread(task_fn);
+        }
+    }
+}
