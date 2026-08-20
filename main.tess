@@ -1,0 +1,24 @@
+import "tesseract_ui.tess";
+
+pub fn main() -> int {
+    let Widget app = Container(
+        width: 1080.0,
+        height: 1920.0,
+        color: Color(0.05, 0.05, 0.08, 1.0),
+        child: GestureDetector(
+            on_tap: || { System.log("Screen Touched"); },
+            child: Column(
+                spacing: 20.0,
+                children: [
+                    Text(content: "Tesseract Native Engine", fontSize: 32.0, color: Color(1.0, 1.0, 1.0, 1.0)),
+                    HologramView(
+                        mesh: AssetBundle.load_mesh("hologram_core.vec"),
+                        rotation: Matrix4.rotate_y(45.0)
+                    )
+                ]
+            )
+        )
+    );
+
+    return TesseractApp.run(app);
+}
