@@ -1,0 +1,27 @@
+module TesseractUI.Physics;
+
+import "core.tess";
+
+pub type RigidBody {
+    position: Vector3,
+    velocity: Vector3,
+    mass: scalar,
+
+    pub fn step(dt: scalar) {
+        lane(width: 16) {
+            self.velocity.y = self.velocity.y - (9.81 * dt);
+            self.position.x = self.position.x + (self.velocity.x * dt);
+            self.position.y = self.position.y + (self.velocity.y * dt);
+            self.position.z = self.position.z + (self.velocity.z * dt);
+        }
+    }
+}
+
+pub type HologramView : Widget {
+    mesh: tensor,
+    rotation: Matrix4,
+
+    pub fn render(canvas: Canvas) {
+        canvas.draw_vector_hologram(self.mesh, self.rotation);
+    }
+}
