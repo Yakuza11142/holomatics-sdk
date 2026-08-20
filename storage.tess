@@ -1,0 +1,15 @@
+module TesseractUI.Storage;
+
+pub type DirectStorage {
+    pub static fn write_bytes(address: scalar, data: tensor) {
+        lane(width: 64) {
+            dispatch nvme_direct_write(address, data);
+        }
+    }
+
+    pub static fn read_bytes(address: scalar, length: scalar) -> tensor {
+        lane(width: 64) {
+            return dispatch nvme_direct_read(address, length);
+        }
+    }
+}
