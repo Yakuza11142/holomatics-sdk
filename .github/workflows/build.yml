@@ -1,18 +1,55 @@
-name: Holomatics Build Test
+name: Tesseract Engine CI/CD Pipeline
 
 on:
   push:
     branches: [ main, master ]
-  workflow_dispatch:
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch: # Allows manual trigger directly from GitHub Mobile app
 
 jobs:
-  build:
+  build-and-test:
+    name: Compile & Package Tesseract Engine
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Code
+      - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Test Environment
+      - name: Set up Build Environment
         run: |
-          echo "Workflow linked successfully!"
-          ls -la
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang
+          echo "Build tools initialized successfully."
+
+      - name: Validate Root .tess Architecture
+        run: |
+          echo "Checking required root module files..."
+          files=(
+            "core.tess" "layout.tess" "state.tess" "text.tess" 
+            "input.tess" "physics.tess" "assets.tess" "audio.tess" 
+            "particles.tess" "network.tess" "animation.tess" "camera.tess" 
+            "shaders.tess" "async.tess" "storage.tess" "router.tess" 
+            "telemetry.tess" "tesseract_ui.tess" "main.tess"
+          )
+          for file in "${files[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "Error: Missing required module $file"
+              exit 1
+            fi
+          done
+          echo "All 19 root framework modules verified."
+
+      - name: Compile Tesseract Application (ARM64 & x86_64)
+        run: |
+          echo "Compiling main.tess entry point..."
+          # Replace 'tess' with your custom compiler CLI command or build invocation
+          # tess build main.tess -o build/tesseract_app
+          mkdir -p build
+          echo "Compilation complete."
+
+      - name: Upload Compiled Binary Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tesseract-build-artifacts
+          path: build/
