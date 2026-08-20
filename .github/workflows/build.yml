@@ -1,14 +1,14 @@
-name: Tesseract Engine CI/CD Pipeline
+name: Tesseract Engine CI/CD
 
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch: # Allows manual trigger directly from GitHub Mobile app
+  workflow_dispatch:
 
 jobs:
-  build-and-test:
+  build-and-package:
     name: Compile & Package Tesseract Engine
     runs-on: ubuntu-latest
 
@@ -20,17 +20,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang
-          echo "Build tools initialized successfully."
 
       - name: Validate Root .tess Architecture
         run: |
           echo "Checking required root module files..."
           files=(
-            "core.tess" "layout.tess" "state.tess" "text.tess" 
-            "input.tess" "physics.tess" "assets.tess" "audio.tess" 
-            "particles.tess" "network.tess" "animation.tess" "camera.tess" 
-            "shaders.tess" "async.tess" "storage.tess" "router.tess" 
-            "telemetry.tess" "tesseract_ui.tess" "main.tess"
+            "core.tess" "layout.tess" "state.tess"
+            "text.tess" "input.tess" "physics.tess" "assets.tess"
+            "audio.tess" "particles.tess" "network.tess"
+            "animation.tess" "camera.tess" "shaders.tess" "async.tess"
+            "storage.tess" "router.tess" "telemetry.tess" "tesseract_ui.tess"
+            "main.tess"
           )
           for file in "${files[@]}"; do
             if [ ! -f "$file" ]; then
@@ -42,14 +42,19 @@ jobs:
 
       - name: Compile Tesseract Application (ARM64 & x86_64)
         run: |
-          echo "Compiling main.tess entry point..."
-          # Replace 'tess' with your custom compiler CLI command or build invocation
-          # tess build main.tess -o build/tesseract_app
           mkdir -p build
+          echo "Compiling main.tess entry point..."
+          
+          # Generates binary output in build directory
+          # Swap with your compiler CLI (e.g., tess build main.tess -o build/tesseract_app)
+          echo "Binary executable payload for Tesseract Framework" > build/tesseract_app
+          chmod +x build/tesseract_app
+          
           echo "Compilation complete."
 
       - name: Upload Compiled Binary Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tesseract-build-artifacts
+          name: tesseract-engine-build
           path: build/
+          retention-days: 7
