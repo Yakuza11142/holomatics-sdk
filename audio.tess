@@ -1,0 +1,13 @@
+module TesseractUI.Audio;
+
+pub type AudioSource {
+    buffer: tensor,
+    volume: scalar,
+    pitch: scalar,
+
+    pub fn play_spatial_3d(position: Vector3) {
+        lane(width: 16) {
+            dispatch dma_stream_audio_3d(self.buffer, position, self.volume, self.pitch);
+        }
+    }
+}
