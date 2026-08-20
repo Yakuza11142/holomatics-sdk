@@ -1,0 +1,19 @@
+module TesseractUI.Router;
+
+import "core.tess";
+
+pub type Router {
+    routes: List<Widget>,
+
+    pub fn push(screen: Widget) {
+        lane(width: 16) {
+            self.routes.append(screen);
+        }
+    }
+
+    pub fn pop() {
+        lane(width: 16) {
+            self.routes.remove_last();
+        }
+    }
+}
