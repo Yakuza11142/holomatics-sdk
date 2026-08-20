@@ -1,0 +1,81 @@
+module TesseractUI.Core;
+
+pub type Vector2 {
+    x: scalar,
+    y: scalar,
+}
+
+pub type Vector3 {
+    x: scalar,
+    y: scalar,
+    z: scalar,
+}
+
+pub type Color {
+    r: scalar,
+    g: scalar,
+    b: scalar,
+    a: scalar,
+}
+
+pub type Matrix4 {
+    m: tensor,
+
+    pub static fn identity() -> Matrix4 {
+        return Matrix4.native_identity_tensor();
+    }
+
+    pub static fn translate(pos: Vector2) -> Matrix4 {
+        return Matrix4.native_translate_2d(pos);
+    }
+
+    pub static fn rotate_y(angle: scalar) -> Matrix4 {
+        return Matrix4.native_rotate_y(angle);
+    }
+}
+
+pub type Canvas {
+    pub fn draw_rect(position: Vector2, size: Vector2, color: Color) {
+        lane(width: 16) {
+            let Matrix4 transform = Matrix4.identity().translate(position);
+            dispatch gpu_draw_quad(transform, size, color);
+        }
+    }
+
+    pub fn draw_vector_hologram(mesh_data: tensor, transform: Matrix4) {
+        lane(width: 32) {
+            dispatch gpu_draw_pipeline(mesh_data, transform);
+        }
+    }
+
+    pub fn draw_glyphs(text_data: string, size: scalar, color: Color) {
+        lane(width: 32) {
+            dispatch gpu_render_vector_glyphs(text_data, size, color);
+        }
+    }
+
+    pub fn clear(color: Color) {
+        lane(width: 16) {
+            dispatch gpu_clear_framebuffer(color);
+        }
+    }
+
+    pub fn swap_buffers() {
+        lane(width: 8) {
+            dispatch gpu_present_frame();
+        }
+    }
+
+    pub static fn init_native_window() -> Canvas {
+        return Canvas();
+    }
+}
+
+pub type BuildContext {
+    canvas: Canvas,
+}
+
+pub trait Widget {
+    pub fn build(ctx: BuildContext) -> Widget;
+    pub fn render(canvas: Canvas);
+}
