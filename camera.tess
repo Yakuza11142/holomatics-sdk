@@ -1,0 +1,14 @@
+module TesseractUI.Camera;
+
+import "core.tess";
+
+pub type SpatialCamera {
+    position: Vector3,
+    fov: scalar,
+
+    pub fn get_projection_matrix() -> Matrix4 {
+        lane(width: 16) {
+            return dispatch compute_perspective_matrix(self.position, self.fov);
+        }
+    }
+}
