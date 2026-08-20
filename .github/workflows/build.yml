@@ -40,21 +40,27 @@ jobs:
           done
           echo "All 19 root framework modules verified."
 
-      - name: Compile Tesseract Application (ARM64 & x86_64)
+      - name: Compile Tesseract Application
         run: |
           mkdir -p build
           echo "Compiling main.tess entry point..."
           
-          # Generates binary output in build directory
-          # Swap with your compiler CLI (e.g., tess build main.tess -o build/tesseract_app)
-          echo "Binary executable payload for Tesseract Framework" > build/tesseract_app
-          chmod +x build/tesseract_app
+          # Run actual tess compiler binary toolchain
+          tess build main.tess --config tess_config.yaml -o build/tesseract_app
           
+          # Verify binary output size (Must be > 1MB)
+          FILE_SIZE=$(stat -c%s "build/tesseract_app" 2>/devnull || echo 0)
+          if [ "$FILE_SIZE" -lt 1000000 ]; then
+            echo "❌ CRITICAL ERROR: Compiler generated invalid or tiny output ($FILE_SIZE bytes)."
+            exit 1
+          fi
+          
+          chmod +x build/tesseract_app
           echo "Compilation complete."
 
       - name: Upload Compiled Binary Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: tesseract-engine-build
-          path: build/
+          path: build/tesseract_app
           retention-days: 7
