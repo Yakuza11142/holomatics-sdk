@@ -1,0 +1,55 @@
+module TesseractUI.Layout;
+
+import "core.tess";
+
+pub type Alignment {
+    pub static fn start() -> Vector2 { return Vector2(0.0, 0.0); }
+    pub static fn center() -> Vector2 { return Vector2(0.5, 0.5); }
+    pub static fn end() -> Vector2 { return Vector2(1.0, 1.0); }
+}
+
+pub type Container : Widget {
+    width: scalar,
+    height: scalar,
+    color: Color,
+    child: Widget,
+
+    pub fn render(canvas: Canvas) {
+        canvas.draw_rect(Vector2(0.0, 0.0), Vector2(self.width, self.height), self.color);
+        if self.child != null {
+            self.child.render(canvas);
+        }
+    }
+}
+
+pub type Column : Widget {
+    children: List<Widget>,
+    spacing: scalar,
+
+    pub fn render(canvas: Canvas) {
+        let scalar y_offset = 0.0;
+        for child in self.children {
+            lane(width: 16) {
+                let Matrix4 position = Matrix4.identity().translate(Vector2(0.0, y_offset));
+                child.render(canvas);
+            }
+            y_offset = y_offset + self.spacing;
+        }
+    }
+}
+
+pub type Row : Widget {
+    children: List<Widget>,
+    spacing: scalar,
+
+    pub fn render(canvas: Canvas) {
+        let scalar x_offset = 0.0;
+        for child in self.children {
+            lane(width: 16) {
+                let Matrix4 position = Matrix4.identity().translate(Vector2(x_offset, 0.0));
+                child.render(canvas);
+            }
+            x_offset = x_offset + self.spacing;
+        }
+    }
+}
