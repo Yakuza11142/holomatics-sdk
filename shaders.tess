@@ -1,0 +1,11 @@
+module TesseractUI.Shaders;
+
+pub type ShaderEffect {
+    shader_bytecode: tensor,
+
+    pub fn bind_and_apply() {
+        lane(width: 32) {
+            dispatch gpu_load_shader_program(self.shader_bytecode);
+        }
+    }
+}
