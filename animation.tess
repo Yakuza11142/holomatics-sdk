@@ -1,0 +1,14 @@
+module TesseractUI.Animation;
+
+import "core.tess";
+
+pub type AnimationController {
+    duration: scalar,
+    progress: scalar,
+
+    pub fn lerp_matrix(start: Matrix4, end: Matrix4) -> Matrix4 {
+        lane(width: 16) {
+            return dispatch simd_matrix_interpolate(start, end, self.progress);
+        }
+    }
+}
