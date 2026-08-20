@@ -1,0 +1,16 @@
+module TesseractUI.Input;
+
+import "core.tess";
+
+pub type GestureDetector : Widget {
+    child: Widget,
+    on_tap: fn(),
+
+    pub fn render(canvas: Canvas) {
+        let Vector2 pointer_pos = System.poll_input();
+        if (System.is_touch_down()) {
+            self.on_tap();
+        }
+        self.child.render(canvas);
+    }
+}
