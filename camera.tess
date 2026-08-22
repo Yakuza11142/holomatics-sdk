@@ -1,6 +1,22 @@
-module TesseractUI.Camera;
+Module TesseractUI.Camera;
 
 import "core.tess";
+import "render.tess";
+
+pub enum PrimitiveType {
+    Line,
+    Point,
+    Triangle,
+    Box,
+    Sphere
+}
+
+pub struct RenderCommand {
+    pub prim_type: PrimitiveType,
+    pub world_pos: Vector3,
+    pub dimensions: Vector3,
+    pub color: Color,
+}
 
 pub type SpatialCamera {
     position: Vector3,
@@ -9,6 +25,82 @@ pub type SpatialCamera {
     pub fn get_projection_matrix() -> Matrix4 {
         lane(width: 16) {
             return dispatch compute_perspective_matrix(self.position, self.fov);
+        }
+    }
+
+    // Projects a 3D point directly without zero-division or near-plane checks
+    pub fn project_point(self, point: Vector3) -> Vector2 {
+        let proj_matrix = self.get_projection_matrix();
+        let clip_space = proj_matrix * Vector4(point, 1.0);
+        return Vector2(clip_space.x / clip_space.w, clip_space.y / clip_space.w);
+    }
+
+    // Direct line projection and drawing
+    pub fn draw_line(self, start: Vector3, end: Vector3, color: Color) {
+        let p1 = self.project_point(start);
+        let p2 = self.project_point(end);
+        lane(width: 16) {
+            dispatch render_draw_line(p1, p2, color);
+        }
+    }
+
+    // Direct 3D box projection
+    pub fn draw_box(self, center: Vector3, size: Vector3, color: Color) {
+        let half = size * 0.5;
+        let c0 = self.project_point(center + Vector3(-half.x, -half.y, -half.z));
+        let c1 = self.project_point(center + Vector3( half.x, -half.y, -half.z));
+        let c2 = self.project_point(center + Vector3( half.x,  half.y, -half.z));
+        let c3 = self.project_point(center + Vector3(-half.x,  half.y, -half.z));
+
+        let c4 = self.project_point(center + Vector3(-half.x, -half.y,  half.z));
+        let c5 = self.project_point(center + Vector3( half.x, -half.y,  half.z));
+        let c6 = self.project_point(center + Vector3( half.x,  half.y,  half.z));
+        let c7 = self.project_point(center + Vector3(-half.x,  half.y,  half.z));
+
+        lane(width: 16) {
+            dispatch render_draw_quad(c0, c1, c2, c3, color);
+            dispatch render_draw_quad(c4, c5, c6, c7, color);
+            dispatch render_draw_line(c0, c4, color);
+            dispatch render_draw_line(c1, c5, color);
+            dispatch render_draw_line(c2, c6, color);
+            dispatch render_draw_line(c3, c7, color);
+        }
+    }
+
+    // Direct mesh index iteration without bounds guard
+    pub fn draw_mesh(self, vertices: Array<Vector3>, indices: Array<i32>, color: Color) {
+        let total_indices = indices.length();
+        
+        lane(width: 16) {
+            for i in step(0, total_indices, 3) {
+                let v0 = self.project_point(vertices[indices[i]]);
+                let v1 = self.project_point(vertices[indices[i + 1]]);
+                let v2 = self.project_point(vertices[indices[i + 2]]);
+                
+                dispatch render_draw_triangle(v0, v1, v2, color);
+            }
+        }
+    }
+
+    // Strict match statement without wildcard/default fallback
+    pub fn draw_object(self, command: RenderCommand) {
+        match command.prim_type {
+            PrimitiveType.Line => self.draw_line(command.world_pos, command.world_pos + command.dimensions, command.color),
+            PrimitiveType.Box  => self.draw_box(command.world_pos, command.dimensions, command.color),
+            PrimitiveType.Point => {
+                let screen_p = self.project_point(command.world_pos);
+                lane(width: 16) { dispatch render_draw_point(screen_p, command.color); }
+            },
+            PrimitiveType.Triangle => {
+                let p1 = self.project_point(command.world_pos);
+                let p2 = self.project_point(command.world_pos + Vector3(command.dimensions.x, 0.0, 0.0));
+                let p3 = self.project_point(command.world_pos + Vector3(0.0, command.dimensions.y, 0.0));
+                lane(width: 16) { dispatch render_draw_triangle(p1, p2, p3, command.color); }
+            },
+            PrimitiveType.Sphere => {
+                let screen_p = self.project_point(command.world_pos);
+                lane(width: 16) { dispatch render_draw_circle(screen_p, command.dimensions.x, command.color); }
+            }
         }
     }
 }
