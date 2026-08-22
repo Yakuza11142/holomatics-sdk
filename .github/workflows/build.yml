@@ -1,122 +1,62 @@
-name: Tesseract Engine CI/CD
+name: Build and Release Velo Compiler
 
 on:
   push:
-    branches:
-      - main
-      - master
+    branches: [ "main", "master" ]
   pull_request:
-    branches:
-      - main
-      - master
-  workflow_dispatch:
+    branches: [ "main", "master" ]
 
 jobs:
-  build-and-package:
-    name: Compile & Package Tesseract Engine
-    runs-on: ubuntu-latest
+  build-and-test:
+    name: Build Velo Compiler (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+    - name: Checkout Source Code
+      uses: actions/checkout@v4
 
-      - name: Install Tess Compiler Toolchain
-        run: |
-          echo "Setting up tess compiler..."
+    - name: Install Compiler Dependencies (Linux)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential gcc
 
-          sudo cat << 'EOF' > /tmp/tess_engine.py
-          import os, sys
+    - name: Compile Velo Toolchain
+      shell: bash
+      run: |
+        if [ "${{ runner.os }}" == "Windows" ]; then
+          gcc -O3 -std=c11 main.c velo.c -o veloc.exe
+        else
+          gcc -O3 -std=c11 main.c velo.c -o veloc
+        fi
 
-          def compile_tess():
-              print("[TESS COMPILER] Initializing native build pipeline...")
-              config = "tess_config.yaml"
-              if not os.path.exists(config):
-                  print(f"COMPILER ERROR: Configuration file {config} not found.")
-                  sys.exit(1)
+    - name: Create Test Source File
+      shell: bash
+      run: |
+        printf 'fn main() {\n    let width: u32 = 1920;\n    var height: u32 = 1080;\n}\n' > engine.vlo
 
-              modules = [
-                  "core.tess", "layout.tess", "state.tess", "text.tess",
-                  "input.tess", "physics.tess", "assets.tess", "audio.tess",
-                  "particles.tess", "network.tess", "animation.tess", "camera.tess",
-                  "shaders.tess", "async.tess", "storage.tess", "router.tess",
-                  "telemetry.tess", "tesseract_ui.tess", "main.tess"
-              ]
+    - name: Test Velo Compilation
+      shell: bash
+      run: |
+        if [ "${{ runner.os }}" == "Windows" ]; then
+          ./veloc.exe engine.vlo -o output
+          gcc build_out.c -o engine_binary.exe
+          ./engine_binary.exe
+        else
+          ./veloc engine.vlo -o output
+          gcc build_out.c -o engine_binary
+          ./engine_binary
+        fi
 
-              payload = bytearray()
-              elf_header = b'\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00>\x00\x01\x00\x00\x00'
-              payload.extend(elf_header)
-
-              for mod in modules:
-                  if not os.path.exists(mod):
-                      print(f"COMPILER ERROR: Missing required module {mod}")
-                      sys.exit(1)
-                  with open(mod, "rb") as f:
-                      payload.extend(f.read())
-
-              target_size = 16 * 1024 * 1024
-              if len(payload) < target_size:
-                  payload.extend(b'\x00' * (target_size - len(payload)))
-
-              os.makedirs("build", exist_ok=True)
-              out_file = "build/tesseract_app"
-              with open(out_file, "wb") as f:
-                  f.write(payload)
-
-              os.chmod(out_file, 0o755)
-              print("[TESS COMPILER] Compilation successful!")
-              print(f"Output Binary: {out_file} ({len(payload) / (1024*1024):.2f} MB)")
-
-          if __name__ == "__main__":
-              compile_tess()
-          EOF
-
-          sudo cat << 'EOF' > /usr/local/bin/tess
-          #!/usr/bin/env bash
-          python3 /tmp/tess_engine.py "$@"
-          EOF
-          sudo chmod +x /usr/local/bin/tess
-
-          if ! command -v tess > /dev/null 2>&1; then
-            echo "CRITICAL ERROR: 'tess' compiler binary not found in system PATH."
-            exit 1
-          fi
-
-          echo "Tess compiler binary successfully installed to system PATH."
-
-      - name: Validate Root .tess Architecture
-        run: |
-          echo "Checking required root module files..."
-          files=(
-            "core.tess" "layout.tess" "state.tess"
-            "text.tess" "input.tess" "physics.tess" "assets.tess"
-            "audio.tess" "particles.tess" "network.tess"
-            "animation.tess" "camera.tess" "shaders.tess" "async.tess"
-            "storage.tess" "router.tess" "telemetry.tess" "tesseract_ui.tess"
-            "main.tess"
-          )
-          for file in "${files[@]}"; do
-            if [ ! -f "$file" ]; then
-              echo "Error: Missing required module $file"
-              exit 1
-            fi
-          done
-          echo "All 19 root framework modules verified."
-
-      - name: Compile Tesseract Application
-        run: |
-          echo "Executing tess compiler CLI..."
-          tess build main.tess --config tess_config.yaml -o build/tesseract_app
-          
-          FILE_SIZE=$(stat -c%s "build/tesseract_app" 2>/dev/null || echo 0)
-          if [ "$FILE_SIZE" -lt 1000000 ]; then
-            echo "CRITICAL ERROR: Compiler generated tiny or corrupted output ($FILE_SIZE bytes)."
-            exit 1
-          fi
-          echo "Compilation verified. Output size: $FILE_SIZE bytes."
-
-      - name: Upload Compiled Binary Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: tesseract-engine-build
-          path: build/tesseract_app
-          retention-days: 7
+    - name: Upload Binary Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: veloc-${{ matrix.os }}
+        path: |
+          veloc
+          veloc.exe
+        if-no-files-found: ignore
