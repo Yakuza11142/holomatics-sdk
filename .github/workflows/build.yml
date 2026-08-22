@@ -3,6 +3,8 @@ name: Build Tess Android SDK
 on:
   push:
     branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
 
 jobs:
   build-sdk:
@@ -17,18 +19,16 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
-    - name: Setup Android NDK
-      uses: nジオ/setup-ndk@v1
-      with:
-        ndk-version: r26b
-
     - name: Build Tess SDK (.aar)
       run: |
         chmod +x gradlew
         ./gradlew assembleRelease
+      env:
+        ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
 
     - name: Upload Tess SDK Artifact (.aar)
       uses: actions/upload-artifact@v4
       with:
         name: tess-sdk-release
-        path: app/build/outputs/aar/*.aar
+        path: "**/build/outputs/aar/*.aar"
+        if-no-files-found: warn
