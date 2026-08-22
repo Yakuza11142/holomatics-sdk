@@ -107,7 +107,7 @@ jobs:
           echo "Executing tess compiler CLI..."
           tess build main.tess --config tess_config.yaml -o build/tesseract_app
           
-          FILE_SIZE=$(stat -c%s "build/tesseract_app" 2>/devnull || echo 0)
+          FILE_SIZE=$(stat -c%s "build/tesseract_app" 2>/dev/null || echo 0)
           if [ "$FILE_SIZE" -lt 1000000 ]; then
             echo "CRITICAL ERROR: Compiler generated tiny or corrupted output ($FILE_SIZE bytes)."
             exit 1
