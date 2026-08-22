@@ -1,0 +1,61 @@
+# Tess Compiler Configuration
+target: native
+optimization_level: O3
+vector_lane_width: 64
+
+build:
+  entry_point: "main.tess"
+  output_dir: "build"
+  binary_name: "tesseract_app"
+  embed_resources: true
+  compiler_source: "tess_compiler.cpp"
+
+rendering:
+  pipeline: "holographic_vector"
+  gpu_acceleration: true
+  vram_allocation_mb: 512
+
+sdk:
+  version: "1.0.0"
+  entry_bundle: "tesseract_ui.tess"
+  modules:
+    - TesseractUI.Animation
+    - TesseractUI.Assets
+    - TesseractUI.Async
+    - TesseractUI.Audio
+    - TesseractUI.Camera
+    - TesseractUI.Core
+    - TesseractUI.Input
+    - TesseractUI.Layout
+    - TesseractUI.Network
+    - TesseractUI.Particles
+    - TesseractUI.Physics
+    - TesseractUI.Router
+    - TesseractUI.Shaders
+    - TesseractUI.State
+    - TesseractUI.Storage
+    - TesseractUI.Telemetry
+    - TesseractUI.Text
+
+files:
+  - animation.tess
+  - assets.tess
+  - async.tess
+  - audio.tess
+  - camera.tess
+  - core.tess
+  - input.tess
+  - layout.tess
+  - main.tess
+  - network.tess
+  - particles.tess
+  - physics.tess
+  - router.tess
+  - shaders.tess
+  - state.tess
+  - storage.tess
+  - telemetry.tess
+  - tess
+  - tess_compiler.cpp
+  - tesseract_ui.tess
+  - text.tess
