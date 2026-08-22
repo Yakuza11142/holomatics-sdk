@@ -1,4 +1,4 @@
-name: Build Tess Android SDK
+name: Auto-Generate Language Bindings & Build Tess SDK
 
 on:
   push:
@@ -7,11 +7,23 @@ on:
     branches: [ "main", "master" ]
 
 jobs:
-  build-sdk:
+  build-all-languages:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout Source Code
       uses: actions/checkout@v4
+
+    - name: Install SWIG Compiler
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y swig
+
+    - name: Generate Multi-Language Bindings
+      run: |
+        mkdir -p bindings/java bindings/csharp bindings/python
+        swig -java -package com.tesseract.ui -outdir bindings/java tess.i
+        swig -csharp -namespace TessEngine -outdir bindings/csharp tess.i
+        swig -python -outdir bindings/python tess.i
 
     - name: Set up Java JDK 17
       uses: actions/setup-java@v4
@@ -22,10 +34,16 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
 
-    - name: Build Tess SDK (.aar)
+    - name: Build Android SDK (.aar)
       run: gradle :library:assembleRelease
 
-    - name: Upload Tess SDK Artifact (.aar)
+    - name: Upload Language Bindings (C#, Python, Java)
+      uses: actions/upload-artifact@v4
+      with:
+        name: tess-multi-language-bindings
+        path: bindings/
+
+    - name: Upload Android SDK (.aar)
       uses: actions/upload-artifact@v4
       with:
         name: tess-sdk-release
