@@ -1,35 +1,73 @@
-module TesseractUI;
+Module TesseractUI.Camera;
 
-pub import "core.tess";
-pub import "layout.tess";
-pub import "state.tess";
-pub import "text.tess";
-pub import "input.tess";
-pub import "physics.tess";
-pub import "assets.tess";
-pub import "audio.tess";
-pub import "particles.tess";
-pub import "network.tess";
-pub import "animation.tess";
-pub import "camera.tess";
-pub import "shaders.tess";
-pub import "async.tess";
-pub import "storage.tess";
-pub import "router.tess";
-pub import "telemetry.tess";
+import "core.tess";
 
-pub type TesseractApp {
-    pub static fn run(root: Widget) -> int {
-        let Canvas main_canvas = Canvas.init_native_window();
-        
-        loop {
-            let Vector2 touch_position = System.poll_input();
-            
-            main_canvas.clear(Color(0.05, 0.05, 0.08, 1.0));
-            root.render(main_canvas);
-            main_canvas.swap_buffers();
+pub struct MeshChunk {
+    pub vertices: tensor,
+    pub normals: tensor,
+    pub semantic_labels: tensor,
+}
+
+pub struct ARSpatialFrame {
+    pub view_matrix: Matrix4,
+    pub projection_matrix: Matrix4,
+    pub camera_pose: Vector3,
+    pub light_intensity: scalar,
+    pub detected_planes: tensor,
+    pub spatial_mesh: MeshChunk,
+    pub depth_map: tensor,
+    pub point_cloud: tensor,
+}
+
+pub type NativeSpatialBridge {
+    pub static fn init() -> NativeSpatialBridge {
+        return NativeSpatialBridge();
+    }
+
+    pub fn poll_frame() -> ARSpatialFrame {
+        let ARSpatialFrame frame = ARSpatialFrame(
+            view_matrix: System.get_raw_view_matrix(),
+            projection_matrix: System.get_raw_projection_matrix(),
+            camera_pose: System.get_raw_camera_pose(),
+            light_intensity: System.get_raw_light_intensity(),
+            detected_planes: System.read_ar_plane_buffer(),
+            spatial_mesh: MeshChunk(
+                vertices: tensor.alloc([1024, 3]),
+                normals: tensor.alloc([1024, 3]),
+                semantic_labels: tensor.alloc([1024])
+            ),
+            depth_map: System.get_raw_depth_stream(),
+            point_cloud: System.read_spatial_point_cloud()
+        );
+
+        lane(width: 64) {
+            frame.spatial_mesh = System.reconstruct_scene_mesh(frame.depth_map);
+            frame.spatial_mesh.semantic_labels = System.classify_objects_segmentation(frame.depth_map);
+            frame.camera_pose = System.compute_vslam_trajectory(frame.point_cloud);
         }
 
-        return 0;
+        return frame;
+    }
+
+    pub fn create_geospatial_anchor(latitude: scalar, longitude: scalar, altitude: scalar) -> Matrix4 {
+        return System.bind_global_geospatial_anchor(latitude, longitude, altitude);
+    }
+}
+
+pub type ARWorldView : Widget {
+    bridge: NativeSpatialBridge,
+    child: Widget,
+
+    pub fn build(ctx: BuildContext) -> Widget {
+        return self.child.build(ctx);
+    }
+
+    pub fn render(canvas: Canvas) {
+        let ARSpatialFrame spatial = self.bridge.poll_frame();
+        
+        canvas.set_spatial_transforms(spatial.view_matrix, spatial.projection_matrix);
+        canvas.draw_world_reconstruction_mesh(spatial.spatial_mesh);
+        
+        self.child.render(canvas);
     }
 }
