@@ -19,16 +19,15 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
 
+    - name: Setup Gradle
+      uses: gradle/actions/setup-gradle@v3
+
     - name: Build Tess SDK (.aar)
-      run: |
-        chmod +x gradlew
-        ./gradlew assembleRelease
-      env:
-        ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
+      run: gradle :library:assembleRelease
 
     - name: Upload Tess SDK Artifact (.aar)
       uses: actions/upload-artifact@v4
       with:
         name: tess-sdk-release
-        path: "**/build/outputs/aar/*.aar"
-        if-no-files-found: warn
+        path: "library/build/outputs/aar/*.aar"
+        if-no-files-found: error
