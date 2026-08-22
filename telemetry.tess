@@ -1,11 +1,37 @@
-module TesseractUI.Telemetry;
+Module TesseractUI.Telemetry;
+
+import "core.tess";
+
+pub struct PerformanceMetrics {
+    pub frame_time_ms: scalar,
+    pub vram_bytes: scalar,
+    pub active_lanes: i32,
+}
 
 pub type Profiler {
     pub static fn get_fps() -> scalar {
-        return System.read_gpu_frame_time();
+        let frame_time = System.read_gpu_frame_time();
+        return 1000.0 / frame_time;
     }
 
     pub static fn get_vram_usage() -> scalar {
         return System.read_vram_registers();
+    }
+
+    pub static fn capture_metrics() -> PerformanceMetrics {
+        return PerformanceMetrics(
+            frame_time_ms: System.read_gpu_frame_time(),
+            vram_bytes: System.read_vram_registers(),
+            active_lanes: 16
+        );
+    }
+
+    pub static fn draw_debug_overlay(canvas: Canvas, metrics: PerformanceMetrics) {
+        let fps_text = "FPS: " + (1000.0 / metrics.frame_time_ms);
+        let vram_text = "VRAM: " + (metrics.vram_bytes / 1024.0 / 1024.0) + " MB";
+
+        canvas.draw_rect(Vector2(10.0, 10.0), Vector2(200.0, 50.0), Color(0.0, 0.0, 0.0, 0.7));
+        canvas.draw_glyphs(fps_text, 14.0, Color(0.0, 1.0, 0.0, 1.0));
+        canvas.draw_glyphs(vram_text, 14.0, Color(0.0, 1.0, 0.0, 1.0));
     }
 }
