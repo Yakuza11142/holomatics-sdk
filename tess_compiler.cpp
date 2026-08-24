@@ -43,7 +43,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Output binary file
-    std::ofstream out("build/tesseract_app", std::ios::binary);
+    std::ofstream out("build/tesseract_sdk", std::ios::binary);
     out.write(reinterpret_cast<const char*>(binary_payload.data()), binary_payload.size());
     out.close();
 
