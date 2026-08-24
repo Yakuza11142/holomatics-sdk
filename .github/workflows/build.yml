@@ -1,55 +1,40 @@
-name: Auto-Generate Language Bindings & Build Tess SDK
+name: Build Holomatics SDK AAR
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
-  build-all-languages:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-    - name: Checkout Source Code
-      uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-    - name: Install SWIG & LLVM Strip Tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y swig llvm proguard
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-    - name: Generate Multi-Language Bindings
-      run: |
-        mkdir -p bindings/java bindings/csharp bindings/python
-        swig -java -package com.tesseract.ui -outdir bindings/java tess.i
-        swig -csharp -namespace TessEngine -outdir bindings/csharp tess.i
-        swig -python -outdir bindings/python tess.i
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-encryption-key: ${{ secrets.GRADLE_ENCRYPTION_KEY }}
 
-    - name: Set up Java JDK 17
-      uses: actions/setup-java@v4
-      with:
-        java-version: '17'
-        distribution: 'temurin'
+      - name: Grant Execute Permission for Gradlew
+        run: chmod +x gradlew
 
-    - name: Setup Gradle
-      uses: gradle/actions/setup-gradle@v3
+      - name: Build Release Library AAR
+        run: ./gradlew :library:assembleRelease -PminifyEnabled=true --configuration-cache --warning-mode all
 
-    - name: Build & Obfuscate Android SDK (.aar)
-      run: gradle :library:assembleRelease -PminifyEnabled=true -PshrinkResources=true
-
-    - name: Strip Native Binary Symbols
-      run: |
-        find . -name "*.so" -exec llvm-strip --strip-all {} +
-
-    - name: Upload Language Bindings (C#, Python, Java)
-      uses: actions/upload-artifact@v4
-      with:
-        name: tess-multi-language-bindings
-        path: bindings/
-
-    - name: Upload Obfuscated Android SDK (.aar)
-      uses: actions/upload-artifact@v4
-      with:
-        name: tess-sdk-release
-        path: "library/build/outputs/aar/*.aar"
-        if-no-files-found: error
+      - name: Upload Native Release AAR Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: holomatics-sdk-release
+          path: library/build/outputs/aar/library-release.aar
+          if-no-files-found: error
