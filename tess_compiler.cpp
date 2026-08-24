@@ -47,8 +47,8 @@ int main(int argc, char* argv[]) {
     out.write(reinterpret_cast<const char*>(binary_payload.data()), binary_payload.size());
     out.close();
 
-    chmod("build/tesseract_app", 0755);
-    std::cout << "✅ [TESS COMPILER NATIVE] Successfully built target: build/tesseract_app ("
+    chmod("build/tesseract_sdk", 0755);
+    std::cout << "✅ [TESS COMPILER NATIVE] Successfully built target: build/tesseract_sdk ("
               << (binary_payload.size() / (1024.0 * 1024.0)) << " MB)" << std::endl;
 
     return 0;
