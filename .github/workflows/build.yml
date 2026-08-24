@@ -13,10 +13,10 @@ jobs:
     - name: Checkout Source Code
       uses: actions/checkout@v4
 
-    - name: Install SWIG Compiler
+    - name: Install SWIG & LLVM Strip Tools
       run: |
         sudo apt-get update
-        sudo apt-get install -y swig
+        sudo apt-get install -y swig llvm proguard
 
     - name: Generate Multi-Language Bindings
       run: |
@@ -34,8 +34,12 @@ jobs:
     - name: Setup Gradle
       uses: gradle/actions/setup-gradle@v3
 
-    - name: Build Android SDK (.aar)
-      run: gradle :library:assembleRelease
+    - name: Build & Obfuscate Android SDK (.aar)
+      run: gradle :library:assembleRelease -PminifyEnabled=true -PshrinkResources=true
+
+    - name: Strip Native Binary Symbols
+      run: |
+        find . -name "*.so" -exec llvm-strip --strip-all {} +
 
     - name: Upload Language Bindings (C#, Python, Java)
       uses: actions/upload-artifact@v4
@@ -43,7 +47,7 @@ jobs:
         name: tess-multi-language-bindings
         path: bindings/
 
-    - name: Upload Android SDK (.aar)
+    - name: Upload Obfuscated Android SDK (.aar)
       uses: actions/upload-artifact@v4
       with:
         name: tess-sdk-release
