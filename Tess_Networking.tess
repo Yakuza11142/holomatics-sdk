@@ -1,0 +1,16 @@
+MODULE TesseractNetworking;
+
+// P2P Spatial Anchor Binary Packet Serialization
+ROUTINE Tess_SerializeAnchorPacket(dev_id: U32, pos: VEC3, rot: QUAT) -> BUFFER
+BEGIN
+    VAR pkt_buf: BUFFER = ALLOC_BUFFER(36); // Explicit 36-byte target payload
+    
+    WRITE_U32(pkt_buf, 0, 0x54455353); // Magic Header: 'TESS'
+    WRITE_U32(pkt_buf, 4, dev_id);
+    WRITE_VEC3(pkt_buf, 8, pos);        // 12 Bytes
+    WRITE_QUAT(pkt_buf, 20, rot);       // 16 Bytes
+
+    RETURN pkt_buf;
+ENDROUTINE;
+
+ENDMODULE;
