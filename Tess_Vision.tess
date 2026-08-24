@@ -1,0 +1,45 @@
+MODULE TesseractVision;
+
+// Ambient Light & Spherical Harmonics Fitting
+ROUTINE Tess_EstimateAmbientLighting(frame_ptr: PTR, width: I32, height: I32) -> SH_COEFFS
+BEGIN
+    VAR sh: SH_COEFFS = CLEAR_STRUCT();
+    VAR samples: I32 = 0;
+
+    FOR y FROM 0 TO height - 1 STEP 16 DO
+        FOR x FROM 0 TO width - 1 STEP 16 DO
+            VAR pixel: COLOR_RGBA = FETCH_PIXEL(frame_ptr, x, y, width);
+            VAR r: F32 = pixel.r / 255.0;
+            VAR g: F32 = pixel.g / 255.0;
+            VAR b: F32 = pixel.b / 255.0;
+
+            VAR nx: F32 = (x / FLOAT(width)) * 2.0 - 1.0;
+            VAR ny: F32 = (y / FLOAT(height)) * 2.0 - 1.0;
+            
+            // NaN guard for unit disk sampling
+            VAR dist_sq: F32 = (nx * nx) + (ny * ny);
+            VAR nz: F32 = 0.0;
+            IF dist_sq < 1.0 THEN
+                nz = MATH_SQRT(1.0 - dist_sq);
+            ENDIF;
+
+            VAR y00: F32 = 0.282095;
+            VAR y11: F32 = 0.488602 * nx;
+            VAR y10: F32 = 0.488602 * nz;
+
+            sh.r[0] = sh.r[0] + (r * y00); sh.r[1] = sh.r[1] + (r * y11);
+            sh.g[0] = sh.g[0] + (g * y00); sh.g[1] = sh.g[1] + (g * y11);
+            sh.b[0] = sh.b[0] + (b * y00); sh.b[1] = sh.b[1] + (b * y11);
+            samples = samples + 1;
+        ENDFOR;
+    ENDFOR;
+
+    IF samples > 0 THEN
+        VAR factor: F32 = (4.0 * 3.14159265) / FLOAT(samples);
+        sh = SH_SCALE(sh, factor);
+    ENDIF;
+
+    RETURN sh;
+ENDROUTINE;
+
+ENDMODULE;
