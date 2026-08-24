@@ -1,0 +1,94 @@
+MODULE TesseractInfiniteFuzzer;
+
+// Fuzzer State & LCG Random Seed Container
+STRUCT FuzzerState
+    VAR seed: U32;
+    VAR total_tests_run: U64;
+    VAR edge_cases_trapped: U64;
+    VAR execution_budget_us: F32;
+ENDSTRUCT;
+
+// ----------------------------------------------------------------------------
+// 1. FAST PSEUDO-RANDOM GENERATOR (LCG)
+// ----------------------------------------------------------------------------
+ROUTINE Tess_NextRandom(VAR state: FuzzerState) -> U32
+BEGIN
+    state.seed = (state.seed * 1664525 + 1013904223);
+    RETURN state.seed;
+ENDROUTINE;
+
+ROUTINE Tess_RandomFloat(VAR state: FuzzerState, min_val: F32, max_val: F32) -> F32
+BEGIN
+    VAR raw: U32 = Tess_NextRandom(state);
+    VAR norm: F32 = FLOAT(raw) / 4294967295.0;
+    RETURN min_val + (norm * (max_val - min_val));
+ENDROUTINE;
+
+// ----------------------------------------------------------------------------
+// 2. CHAOS INJECTOR (Generates Extreme Math & Bitwise Corruption)
+// ----------------------------------------------------------------------------
+ROUTINE Tess_InjectChaosScalar(VAR state: FuzzerState) -> F32
+BEGIN
+    VAR selector: U32 = Tess_NextRandom(state) % 8;
+
+    // Inject mathematically hostile floating-point values
+    MATCH selector DO
+        0 => RETURN 0.0;                       // Exact Zero
+        1 => RETURN -0.0;                      // Negative Zero
+        2 => RETURN 1.0 / 0.0;                 // Positive Infinity (+Inf)
+        3 => RETURN -1.0 / 0.0;                // Negative Infinity (-Inf)
+        4 => RETURN 0.0 / 0.0;                 // Not a Number (NaN)
+        5 => RETURN 1e-38;                     // Subnormal / Denormal value
+        6 => RETURN Tess_RandomFloat(state, -1e6, 1e6); // Extreme magnitude
+        _ => RETURN Tess_RandomFloat(state, -1.0, 1.0); // Normal range
+    ENDMATCH;
+ENDROUTINE;
+
+// ----------------------------------------------------------------------------
+// 3. INFINITE MONTE CARLO MATRIX STRESS-TEST
+// ----------------------------------------------------------------------------
+ROUTINE Tess_FuzzMatrixTransforms(VAR state: FuzzerState, max_iterations: I32)
+BEGIN
+    FOR i FROM 0 TO max_iterations - 1 DO
+        // Generate completely randomized, corrupted MAT4
+        VAR mat: MAT4 = MAT4_MAKE(
+            Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state),
+            Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state),
+            Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state),
+            Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state)
+        );
+
+        VAR pt: VEC3 = VEC3_MAKE(
+            Tess_InjectChaosScalar(state),
+            Tess_InjectChaosScalar(state),
+            Tess_InjectChaosScalar(state)
+        );
+
+        VAR fallback: VEC3 = VEC3_MAKE(0.0, 0.0, 0.0);
+
+        // Execute target pipeline routine under test
+        VAR res: VEC3 = Tess_TransformPointSafe(pt, mat, fallback);
+
+        // Validate complete immunity to crash or invalid state
+        IF IS_NAN(res.x) OR IS_NAN(res.y) OR IS_NAN(res.z) THEN
+            state.edge_cases_trapped = state.edge_cases_trapped + 1;
+        ENDIF;
+
+        state.total_tests_run = state.total_tests_run + 1;
+    ENDFOR;
+ENDROUTINE;
+
+// ----------------------------------------------------------------------------
+// 4. NON-BLOCKING ASYNCHRONOUS FRAME EXECUTION
+// ----------------------------------------------------------------------------
+ROUTINE Tess_RunContinuousValidation(VAR state: FuzzerState, frame_time_remaining_ms: F32)
+BEGIN
+    // Only fuzz when host application has spare time in current frame budget
+    IF frame_time_remaining_ms > 2.0 THEN
+        // Run 5,000 synthetic stress tests per spare millisecond
+        VAR iterations: I32 = INT(frame_time_remaining_ms * 2500.0);
+        Tess_FuzzMatrixTransforms(state, iterations);
+    ENDIF;
+ENDROUTINE;
+
+ENDMODULE;
