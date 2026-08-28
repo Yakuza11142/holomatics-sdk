@@ -1,19 +1,44 @@
-module TesseractUI.Router;
+Module TesseractUI.Router;
 
 import "core.tess";
 
 pub type Router {
-    routes: List<Widget>,
+    pub routes: Array<Widget>,
 
-    pub fn push(screen: Widget) {
+    // Fixed: Added explicit self receiver reference to access local variables
+    // Hardened: Direct validation checks block empty, malformed, or corrupt widgets from corrupting the tree
+    pub fn push(self, screen: Widget) -> bool {
+        if !dispatch is_widget_valid(screen) {
+            return false;
+        }
+
         lane(width: 16) {
             self.routes.append(screen);
+            return true;
         }
     }
 
-    pub fn pop() {
+    // Defensive: Implements strict structural array boundary tracking to prevent memory stack underflows
+    pub fn pop(self) -> bool {
+        let active_stack_depth = self.routes.length();
+        
+        // Prevent out-of-bounds array access if the navigation tree is already completely empty
+        if active_stack_depth == 0 {
+            return false;
+        }
+
         lane(width: 16) {
             self.routes.remove_last();
+            return true;
         }
+    }
+
+    // Advanced: Automatically fetches the top-most active application layer safely
+    pub fn get_active_route(self) -> Widget {
+        let active_stack_depth = self.routes.length();
+        if active_stack_depth == 0 {
+            return dispatch get_fallback_empty_widget();
+        }
+        return self.routes[active_stack_depth - 1];
     }
 }
