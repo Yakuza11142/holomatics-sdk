@@ -1,19 +1,36 @@
-module TesseractUI.State;
+Module TesseractUI.State;
 
 import "core.tess";
 
 pub trait StatefulWidget : Widget {
-    pub fn create_state() -> State;
+    pub fn create_state(self) -> State;
 }
 
 pub type State {
-    dirty: bool,
+    pub widget_id: u32,
+    pub dirty: bool,
+    pub is_processing_mutation: bool, // Latch lock to prevent infinite reentrant recursive loops
 
-    pub fn set_state(updater: fn()) {
+    // Fixed: Added explicit self receiver reference to access local variables
+    // Hardened: Implements strict latch locks to prevent state corruption or recursive deadlocks
+    pub fn set_state(self, updater: fn()) -> bool {
+        if self.is_processing_mutation || self.widget_id == 0 {
+            return false; // Intercept recursive loops early to prevent pipeline lockup
+        }
+
+        // Active state lock mutation tracking activation
+        self.is_processing_mutation = true;
+        
+        // Execute the state data mutation closure cleanly
         updater();
+        
         self.dirty = true;
+        self.is_processing_mutation = false; // Release lock safe bounds protection
+
         lane(width: 8) {
-            dispatch gpu_mark_dirty_rect();
+            // Signal downstream render worker lanes to trigger an immediate frame reconstruction pass
+            dispatch gpu_mark_dirty_rect(self.widget_id);
+            return true;
         }
     }
 }
