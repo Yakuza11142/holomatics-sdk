@@ -1,11 +1,32 @@
-module TesseractUI.Shaders;
+Module TesseractUI.Shaders;
+
+import "core.tess";
+
+pub enum ShaderState {
+    Unloaded,
+    LinkedSuccess,
+    CompilationFailed,
+    DriverStall
+}
 
 pub type ShaderEffect {
-    shader_bytecode: tensor,
+    pub shader_id: u32,
+    pub shader_bytecode: tensor,
 
-    pub fn bind_and_apply() {
+    // Fixed: Added explicit self receiver reference to access local variables
+    // Hardened: Implements strict binary validation boundaries to shield the GPU driver from corruption crashes
+    pub fn bind_and_apply(self) -> bool {
+        // Safe validation guard: Immediately drop empty or invalid buffers before they touch hardware lines
+        if !dispatch is_tensor_valid(self.shader_bytecode) || self.shader_id == 0 {
+            return false;
+        }
+
         lane(width: 32) {
-            dispatch gpu_load_shader_program(self.shader_bytecode);
+            // Securely load the raw program bytecode into the graphics compute array blocks
+            let bind_status = dispatch gpu_load_shader_program(self.shader_id, self.shader_bytecode);
+            
+            // Return validation outcome (Verify the hardware compilation sequence executed cleanly)
+            return bind_status == 1; // 1 == ShaderState.LinkedSuccess
         }
     }
 }
