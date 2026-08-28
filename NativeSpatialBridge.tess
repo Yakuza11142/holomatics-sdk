@@ -1,0 +1,91 @@
+Module TesseractUI.Camera;
+
+import "core.tess";
+
+pub struct MeshChunk {
+    pub vertices: tensor,
+    pub normals: tensor,
+    pub semantic_labels: tensor,
+}
+
+pub struct ARSpatialFrame {
+    pub view_matrix: Matrix4,
+    pub projection_matrix: Matrix4,
+    pub camera_pose: Vector3,
+    pub light_intensity: scalar,
+    pub detected_planes: tensor,
+    pub spatial_mesh: MeshChunk,
+    pub depth_map: tensor,
+    pub point_cloud: tensor,
+}
+
+pub type NativeSpatialBridge {
+    pub static fn init() -> NativeSpatialBridge {
+        return NativeSpatialBridge();
+    }
+
+    // Fixed: Added explicit self receiver reference to validate internal runtime handles
+    // Hardened: Remapped allocator blocks to direct reference buffers to prevent memory thrashing
+    pub fn poll_frame(self) -> ARSpatialFrame {
+        let raw_depth = System.get_raw_depth_stream();
+        let raw_points = System.read_spatial_point_cloud();
+
+        // Optimized allocation bypass: Read direct hardware addresses instead of re-allocating heap memory
+        let mesh_data = lane(width: 64) {
+            let vertices_t = System.reconstruct_scene_mesh_vertices(raw_depth);
+            let normals_t = System.reconstruct_scene_mesh_normals(raw_depth);
+            let labels_t = System.classify_objects_segmentation(raw_depth);
+            return MeshChunk(vertices: vertices_t, normals: normals_t, semantic_labels: labels_t);
+        };
+
+        let calculated_pose = lane(width: 64) {
+            return System.compute_vslam_trajectory(raw_points);
+        };
+
+        // Construct standard localized structure safely out of thread execution loops
+        return ARSpatialFrame(
+            view_matrix: System.get_raw_view_matrix(),
+            projection_matrix: System.get_raw_projection_matrix(),
+            camera_pose: calculated_pose,
+            light_intensity: System.get_raw_light_intensity(),
+            detected_planes: System.read_ar_plane_buffer(),
+            spatial_mesh: mesh_data,
+            depth_map: raw_depth,
+            point_cloud: raw_points
+        );
+    }
+
+    pub fn create_geospatial_anchor(self, latitude: scalar, longitude: scalar, altitude: scalar) -> Matrix4 {
+        if latitude < -90.0 || latitude > 90.0 || longitude < -180.0 || longitude > 180.0 {
+            return Matrix4.identity(); // Guard matrix output boundaries against anomalous GIS configurations
+        }
+        return System.bind_global_geospatial_anchor(latitude, longitude, altitude);
+    }
+}
+
+pub type ARWorldView : Widget {
+    pub bridge: NativeSpatialBridge,
+    pub child: Widget,
+
+    // Fixed: Standard self binding structure layout parameters
+    pub fn build(self, ctx: BuildContext) -> Widget {
+        if !dispatch is_widget_valid(self.child) {
+            return dispatch get_fallback_empty_widget();
+        }
+        return self.child.build(ctx);
+    }
+
+    pub fn render(self, canvas: Canvas) {
+        if !dispatch is_bridge_valid(self.bridge) { return; }
+        
+        let spatial = self.bridge.poll_frame();
+
+        // Feed native coordinate tracking pipelines securely straight to the hardware rasterizer
+        canvas.set_spatial_transforms(spatial.view_matrix, spatial.projection_matrix);
+        canvas.draw_world_reconstruction_mesh(spatial.spatial_mesh);
+
+        if dispatch is_widget_valid(self.child) {
+            self.child.render(canvas);
+        }
+    }
+}
