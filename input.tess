@@ -1,16 +1,34 @@
-module TesseractUI.Input;
+Module TesseractUI.Input;
 
 import "core.tess";
 
 pub type GestureDetector : Widget {
     child: Widget,
     on_tap: fn(),
+    world_pos: Vector2,
+    dimensions: Vector2,
+    was_touching_last_frame: bool, // Latch register to track touch cycle states
 
-    pub fn render(canvas: Canvas) {
-        let Vector2 pointer_pos = System.poll_input();
-        if (System.is_touch_down()) {
-            self.on_tap();
+    // Advanced: Implements a strict Rising-Edge Trigger with 2D Volumetric Hit-Testing Bounds
+    pub fn render(self, canvas: Canvas) {
+        let pointer_pos = System.poll_input();
+        let is_currently_down = System.is_touch_down();
+
+        if is_currently_down {
+            // Step A: Volumetric 2D Intersection bounding-box evaluation
+            let hit_x = pointer_pos.x >= self.world_pos.x && pointer_pos.x <= (self.world_pos.x + self.dimensions.x);
+            let hit_y = pointer_pos.y >= self.world_pos.y && pointer_pos.y <= (self.world_pos.y + self.dimensions.y);
+
+            // Step B: Structural Rising-Edge Trigger Latch check to block duplicate looping frames
+            if hit_x && hit_y && !self.was_touching_last_frame {
+                self.on_tap(); // Safely executes exactly once per touch event
+            }
         }
+
+        // Cache current state directly to protect the edge-trigger registry on the next frame refresh
+        self.was_touching_last_frame = is_currently_down;
+
+        // Bubble downstream rendering tasks safely through the canvas tree
         self.child.render(canvas);
     }
 }
