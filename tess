@@ -1,5 +1,21 @@
-# Compile with high optimization (-O3) and static linking
-clang++ -O3 -static tess_compiler.cpp -o tess
+#!/usr/bin/env bash
+# Enforce strict error handling parameters to drop the pipeline if a step crashes
+set -euo pipefail
 
-# Test the binary locally
-./tess --version
+echo "⚙️ Initializing Hardened Tesseract Compiler Execution Build Pipeline..."
+
+# Advanced: Compiles with maximum optimization (-O3) combined with native binary exploit fences
+clang++ -O3 -static \
+    -fstack-protector-strong \
+    -D_FORTIFY_SOURCE=2 \
+    -Wformat -Werror=format-security \
+    tess_compiler.cpp -o tess
+
+# Verify and execute local system validation tests
+if [ -f "./tess" ]; then
+    echo "✅ Native binary asset compiled successfully."
+    ./tess --version
+else
+    echo "❌ Critical build compilation target failure."
+    exit 1
+fi
