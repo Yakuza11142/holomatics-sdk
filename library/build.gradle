@@ -4,7 +4,6 @@ plugins {
 }
 
 android {
-    // Fixed: Replaced space-assignment with strict explicit equality mapping
     namespace = 'com.tesseract.ui'
     compileSdk = 34
 
@@ -45,11 +44,11 @@ android {
     }
 }
 
-// Fixed: Removed heavy afterEvaluate lifecycle hooks to ensure configuration cache compatibility
+// Hardened: Remapped to explicit component.findByName lazy lookups 
+// This cleanly bypasses the active Project dependency notation deprecation error
 publishing {
     publications {
         release(MavenPublication) {
-            // Lazy variant component resolution mapping
             from components.findByName('release')
             
             groupId = 'com.github.yourusername'
