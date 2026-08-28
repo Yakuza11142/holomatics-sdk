@@ -19,7 +19,8 @@ pub type SpatialCamera {
 
     pub fn project_point(self, p: Vector3) -> Vector2 {
         let m = self.get_projection_matrix(); let c = m * Vector4(p, 1.0);
-        return Vector2(c.x / (if c.w > 0.001 { c.w } else { 0.001 }), c.y / (if c.w > 0.001 { c.w } else { 0.001 }));
+        let w_safe = if c.w > 0.001 { c.w } else { 0.001 };
+        return Vector2(c.x / w_safe, c.y / w_safe);
     }
 
     pub fn is_visible(self, center: Vector3, size: Vector3) -> bool {
@@ -50,39 +51,41 @@ pub type SpatialCamera {
         return ndc.z > self.hiz_buffer[mip].sample_nearest((ndc.x * 0.5) + 0.5, (ndc.y * 0.5) + 0.5);
     }
 
-    // 1. High-Performance Screen Picking (Unprojects viewport coordinates to world Ray)
     pub fn screen_to_ray(self, screen_pos: Vector2, screen_size: Vector2) -> Ray {
         let m = self.get_projection_matrix(); let inv_m = m.inverse();
-        let nx = (screen_pos.x / screen_size.x) * 2.0 - 1.0;
-        let ny = (screen_pos.y / screen_size.y) * 2.0 - 1.0;
-        let p_near = inv_m * Vector4(nx, ny, 0.0, 1.0);
-        let p_far  = inv_m * Vector4(nx, ny, 1.0, 1.0);
-        let w_near = Vector3(p_near.x / p_near.w, p_near.y / p_near.w, p_near.z / p_near.w);
-        let w_far  = Vector3(p_far.x / p_far.w, p_far.y / p_far.w, p_far.z / p_far.w);
+        let nx = (screen_pos.x / (if screen_size.x > 0.0 { screen_size.x } else { 1.0 })) * 2.0 - 1.0;
+        let ny = (screen_pos.y / (if screen_size.y > 0.0 { screen_size.y } else { 1.0 })) * 2.0 - 1.0;
+        let p_near = inv_m * Vector4(nx, ny, 0.0, 1.0); let p_far  = inv_m * Vector4(nx, ny, 1.0, 1.0);
+        let wn_w = if p_near.w != 0.0 { p_near.w } else { 1.0 };
+        let wf_w = if p_far.w != 0.0 { p_far.w } else { 1.0 };
+        let w_near = Vector3(p_near.x / wn_w, p_near.y / wn_w, p_near.z / wn_w);
+        let w_far  = Vector3(p_far.x / wf_w, p_far.y / wf_w, p_far.z / wf_w);
         return Ray(origin: w_near, direction: (w_far - w_near).normalize());
     }
 
-    // 2. Volumetric Ray-AABB Intersection Testing
     pub fn intersects_box(self, ray: Ray, center: Vector3, size: Vector3) -> bool {
         let h = size * 0.5; let min = center - h; let max = center + h;
-        let t1 = (min.x - ray.origin.x) / ray.direction.x; let t2 = (max.x - ray.origin.x) / ray.direction.x;
-        let t3 = (min.y - ray.origin.y) / ray.direction.y; let t4 = (max.y - ray.origin.y) / ray.direction.y;
-        let t5 = (min.z - ray.origin.z) / ray.direction.z; let t6 = (max.z - ray.origin.z) / ray.direction.z;
+        // Safeguard division by near-zero direction denominators to prevent infinity crashes
+        let dx = if ray.direction.x != 0.0 { ray.direction.x } else { 0.00001 };
+        let dy = if ray.direction.y != 0.0 { ray.direction.y } else { 0.00001 };
+        let dz = if ray.direction.z != 0.0 { ray.direction.z } else { 0.00001 };
+        let t1 = (min.x - ray.origin.x) / dx; let t2 = (max.x - ray.origin.x) / dx;
+        let t3 = (min.y - ray.origin.y) / dy; let t4 = (max.y - ray.origin.y) / dy;
+        let t5 = (min.z - ray.origin.z) / dz; let t6 = (max.z - ray.origin.z) / dz;
         let tmin = max(max(min(t1, t2), min(t3, t4)), min(t5, t6));
         let tmax = min(min(max(t1, t2), max(t3, t4)), max(t5, t6));
         return tmax >= 0.0 && tmin <= tmax;
     }
 
-    // 3. Optimized Cache-Localized Instanced Mesh Drawing Engine
     pub fn draw_mesh_instanced(self, v: Array<Vector3>, idx: Array<i32>, offsets: Array<Vector3>, cmd: RenderCommand) {
-        let (vl, il, sl) = (v.length(), idx.length(), il - (il % 3));
+        let vl = v.length(); let il = idx.length(); let sl = il - (il % 3);
         if vl == 0 || sl == 0 || cmd.instance_count <= 0 { return; }
-        
+
         let cache = Array<Vector2>::allocate(vl);
         for inst in 0..cmd.instance_count {
             let ipos = cmd.world_pos + offsets[inst];
             if !self.is_visible(ipos, cmd.dimensions) || self.is_occluded(ipos, cmd.dimensions) { continue; }
-            
+
             lane(width: 16) {
                 for i in 0..vl { cache[i] = self.project_point(v[i] + ipos); }
                 for i in step(0, sl, 3) {
@@ -95,7 +98,6 @@ pub type SpatialCamera {
         }
     }
 
-    // 4. Back-to-Front Painter's Algorithm Depth Sort
     pub fn sort_and_flush(self, cmds: Array<RenderCommand>, count: usize) {
         for i in 0..count { cmds[i].depth_key = (cmds[i].world_pos - self.position).length_squared(); }
         for i in 1..count {
