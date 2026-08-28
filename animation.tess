@@ -1,4 +1,4 @@
-module TesseractUI.Animation;
+Module TesseractUI.Animation;
 
 import "core.tess";
 
@@ -6,9 +6,14 @@ pub type AnimationController {
     duration: scalar,
     progress: scalar,
 
-    pub fn lerp_matrix(start: Matrix4, end: Matrix4) -> Matrix4 {
+    // Fixed: Added explicit self receiver reference to access local variables
+    // Hardened: Clamps interpolation weights strictly to eliminate geometry tearing artifacts
+    pub fn lerp_matrix(self, start: Matrix4, end: Matrix4) -> Matrix4 {
+        // Enforce safe saturation limits across interpolation channels
+        let safe_t = if self.progress < 0.0 { 0.0 } else if self.progress > 1.0 { 1.0 } else { self.progress };
+
         lane(width: 16) {
-            return dispatch simd_matrix_interpolate(start, end, self.progress);
+            return dispatch simd_matrix_interpolate(start, end, safe_t);
         }
     }
 }
