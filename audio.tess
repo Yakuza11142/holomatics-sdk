@@ -1,13 +1,19 @@
-module TesseractUI.Audio;
+Module TesseractUI.Audio;
 
 pub type AudioSource {
     buffer: tensor,
     volume: scalar,
     pitch: scalar,
 
-    pub fn play_spatial_3d(position: Vector3) {
+    // Fixed: Added explicit self receiver reference to access local variables
+    // Hardened: Implements strict floating-point saturation constraints to protect audio hardware
+    pub fn play_spatial_3d(self, position: Vector3) {
+        // Enforce safe audio boundary thresholds (Clamp volume between 0.0 and 1.0; pitch between 0.1 and 3.0)
+        let safe_vol = if self.volume < 0.0 { 0.0 } else if self.volume > 1.0 { 1.0 } else { self.volume };
+        let safe_pitch = if self.pitch < 0.1 { 0.1 } else if self.pitch > 3.0 { 3.0 } else { self.pitch };
+
         lane(width: 16) {
-            dispatch dma_stream_audio_3d(self.buffer, position, self.volume, self.pitch);
+            dispatch dma_stream_audio_3d(self.buffer, position, safe_vol, safe_pitch);
         }
     }
 }
