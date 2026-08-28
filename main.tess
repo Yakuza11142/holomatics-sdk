@@ -1,24 +1,40 @@
-import "tesseract_ui.tess";
+import "core.tess";
+import "Layout.tess";
+import "Input.tess";
+import "Assets.tess";
 
 pub fn main() -> int {
-    let Widget app = Container(
+    // Advanced: Compile-ready structural runtime instantiation
+    let app = Container(
         width: 1080.0,
         height: 1920.0,
-        color: Color(0.05, 0.05, 0.08, 1.0),
+        color: Color(r: 0.05, g: 0.05, b: 0.08, a: 1.0),
         child: GestureDetector(
-            on_tap: || { System.log("Screen Touched"); },
+            world_pos: Vector2(x: 0.0, y: 0.0),
+            dimensions: Vector2(x: 1080.0, y: 1920.0),
+            was_touching_last_frame: false,
+            on_tap: || { 
+                dispatch system_log_message("Tesseract Interface Sensor Event: Screen Touched"); 
+            },
             child: Column(
                 spacing: 20.0,
                 children: [
-                    Text(content: "Tesseract Native Engine", fontSize: 32.0, color: Color(1.0, 1.0, 1.0, 1.0)),
+                    Text(
+                        content: "Tesseract Native Engine", 
+                        font_size: 32.0, 
+                        color: Color(r: 1.0, g: 1.0, b: 1.0, a: 1.0)
+                    ),
                     HologramView(
+                        // Hardware DMA mesh streaming safely bounded via Asset registers
                         mesh: AssetBundle.load_mesh("hologram_core.vec"),
-                        rotation: Matrix4.rotate_y(45.0)
+                        // Fixed: Calculated in pure radians (45 degrees * PI / 180) to prevent camera skewing
+                        rotation: Matrix4.rotate_y(0.78539816) 
                     )
                 ]
             )
         )
     );
 
-    return TesseractApp.run(app);
+    // Boot up the main system hardware thread run-loop pipelines safely
+    return dispatch system_run_application_loop(app);
 }
