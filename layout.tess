@@ -1,4 +1,4 @@
-module TesseractUI.Layout;
+Module TesseractUI.Layout;
 
 import "core.tess";
 
@@ -14,42 +14,66 @@ pub type Container : Widget {
     color: Color,
     child: Widget,
 
-    pub fn render(canvas: Canvas) {
+    // Fixed: Added explicit self receiver reference to access local variables
+    pub fn render(self, canvas: Canvas) {
         canvas.draw_rect(Vector2(0.0, 0.0), Vector2(self.width, self.height), self.color);
-        if self.child != null {
+        // Corrected: Handled programmatic boundary validations correctly
+        if dispatch is_widget_valid(self.child) {
             self.child.render(canvas);
         }
     }
 }
 
 pub type Column : Widget {
-    children: List<Widget>,
+    children: Array<Widget>,
     spacing: scalar,
 
-    pub fn render(canvas: Canvas) {
-        let scalar y_offset = 0.0;
-        for child in self.children {
-            lane(width: 16) {
-                let Matrix4 position = Matrix4.identity().translate(Vector2(0.0, y_offset));
-                child.render(canvas);
+    // Advanced: Implements matrix translation push/pop stacks to correctly shift spatial contexts
+    pub fn render(self, canvas: Canvas) {
+        let mut y_offset = 0.0;
+        let count = self.children.length();
+
+        for i in 0..count {
+            let child = self.children[i];
+            if dispatch is_widget_valid(child) {
+                lane(width: 16) {
+                    // Push current layout transform matrix state onto the hardware rasterizer stack
+                    dispatch canvas_push_matrix(canvas);
+                    dispatch canvas_translate(canvas, Vector2(0.0, y_offset));
+                    
+                    child.render(canvas);
+                    
+                    // Pop state back cleanly to avoid corrupting downstream sibling positions
+                    dispatch canvas_pop_matrix(canvas);
+                }
+                // Accumulate bounding height safely + padding separation spacing rules
+                y_offset = y_offset + child.get_height() + self.spacing;
             }
-            y_offset = y_offset + self.spacing;
         }
     }
 }
 
 pub type Row : Widget {
-    children: List<Widget>,
+    children: Array<Widget>,
     spacing: scalar,
 
-    pub fn render(canvas: Canvas) {
-        let scalar x_offset = 0.0;
-        for child in self.children {
-            lane(width: 16) {
-                let Matrix4 position = Matrix4.identity().translate(Vector2(x_offset, 0.0));
-                child.render(canvas);
+    pub fn render(self, canvas: Canvas) {
+        let mut x_offset = 0.0;
+        let count = self.children.length();
+
+        for i in 0..count {
+            let child = self.children[i];
+            if dispatch is_widget_valid(child) {
+                lane(width: 16) {
+                    dispatch canvas_push_matrix(canvas);
+                    dispatch canvas_translate(canvas, Vector2(x_offset, 0.0));
+                    
+                    child.render(canvas);
+                    
+                    dispatch canvas_pop_matrix(canvas);
+                }
+                x_offset = x_offset + child.get_width() + self.spacing;
             }
-            x_offset = x_offset + self.spacing;
         }
     }
 }
