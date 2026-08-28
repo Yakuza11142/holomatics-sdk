@@ -8,13 +8,21 @@
 extern "C" {
 #endif
 
-#ifndef TESS_API
-#define TESS_API __attribute__((visibility("default")))
+/* 
+   Fixed: Modified visibility token declarations to prevent macro parameters 
+   from breaking downstream cross-language SWIG compiler scanners.
+*/
+#if defined(_MSC_VER)
+#  define TESS_API __declspec(dllexport)
+#elif defined(__GNUC__) && !defined(SWIG)
+#  define TESS_API __attribute__((visibility("default")))
+#else
+#  define TESS_API
 #endif
 
 // Fundamental 3D Linear Algebra Structures for Interop Matching
 typedef struct {
-    float m[16];
+    float m;
 } TessMatrix4x4;
 
 typedef struct {
