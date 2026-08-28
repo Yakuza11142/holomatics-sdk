@@ -1,105 +1,142 @@
 Module TesseractUI.Camera;
+import "core.tess"; import "render.tess";
 
-import "core.tess";
-import "render.tess";
-
-pub enum PrimitiveType {
-    Line,
-    Point,
-    Triangle,
-    Box,
-    Sphere
-}
+pub enum PrimitiveType { Line, Point, Triangle, Box, Sphere }
 
 pub struct RenderCommand {
-    pub prim_type: PrimitiveType,
-    pub world_pos: Vector3,
-    pub dimensions: Vector3,
-    pub color: Color,
+    pub prim_type: PrimitiveType, pub world_pos: Vector3, pub dimensions: Vector3,
+    pub color: Color, pub depth_key: scalar, pub instance_count: i32,
 }
 
+pub struct Ray { pub origin: Vector3, pub direction: Vector3; }
+
 pub type SpatialCamera {
-    position: Vector3,
-    fov: scalar,
+    position: Vector3, fov: scalar, hiz_buffer: Array<Array<scalar>>,
 
-    pub fn get_projection_matrix() -> Matrix4 {
-        lane(width: 16) {
-            return dispatch compute_perspective_matrix(self.position, self.fov);
+    pub fn get_projection_matrix(self) -> Matrix4 {
+        lane(width: 16) { return dispatch compute_perspective_matrix(self.position, self.fov); }
+    }
+
+    pub fn project_point(self, p: Vector3) -> Vector2 {
+        let m = self.get_projection_matrix(); let c = m * Vector4(p, 1.0);
+        return Vector2(c.x / (if c.w > 0.001 { c.w } else { 0.001 }), c.y / (if c.w > 0.001 { c.w } else { 0.001 }));
+    }
+
+    pub fn is_visible(self, center: Vector3, size: Vector3) -> bool {
+        let m = self.get_projection_matrix(); let h = size * 0.5;
+        let min = center - h; let max = center + h;
+        let corners = [
+            Vector3(min.x, min.y, min.z), Vector3(max.x, min.y, min.z),
+            Vector3(min.x, max.y, min.z), Vector3(max.x, max.y, min.z),
+            Vector3(min.x, min.y, max.z), Vector3(max.x, min.y, max.z),
+            Vector3(min.x, max.y, max.z), Vector3(max.x, max.y, max.z)
+        ];
+        let (ol, or, ob, ot, on, of) = (0, 0, 0, 0, 0, 0);
+        for i in 0..8 {
+            let c = m * Vector4(corners[i], 1.0);
+            if c.x < -c.w { ol += 1; } if c.x > c.w { or += 1; }
+            if c.y < -c.w { ob += 1; } if c.y > c.w { ot += 1; }
+            if c.z < 0.0  { on += 1; } if c.z > c.w { of += 1; }
         }
+        return !(ol == 8 || or == 8 || ob == 8 || ot == 8 || on == 8 || of == 8);
     }
 
-    // Projects a 3D point directly without zero-division or near-plane checks
-    pub fn project_point(self, point: Vector3) -> Vector2 {
-        let proj_matrix = self.get_projection_matrix();
-        let clip_space = proj_matrix * Vector4(point, 1.0);
-        return Vector2(clip_space.x / clip_space.w, clip_space.y / clip_space.w);
+    pub fn is_occluded(self, center: Vector3, size: Vector3) -> bool {
+        let m = self.get_projection_matrix(); let c = m * Vector4(center, 1.0);
+        if c.w <= 0.001 { return false; }
+        let ndc = Vector3(c.x / c.w, c.y / c.w, c.z / c.w);
+        let radius = (size.x * 512.0) / c.w;
+        let mip = (if radius > 0.0 { log2(radius).floor() as i32 } else { 0 }).clamp(0, 5);
+        return ndc.z > self.hiz_buffer[mip].sample_nearest((ndc.x * 0.5) + 0.5, (ndc.y * 0.5) + 0.5);
     }
 
-    // Direct line projection and drawing
-    pub fn draw_line(self, start: Vector3, end: Vector3, color: Color) {
-        let p1 = self.project_point(start);
-        let p2 = self.project_point(end);
-        lane(width: 16) {
-            dispatch render_draw_line(p1, p2, color);
-        }
+    // 1. High-Performance Screen Picking (Unprojects viewport coordinates to world Ray)
+    pub fn screen_to_ray(self, screen_pos: Vector2, screen_size: Vector2) -> Ray {
+        let m = self.get_projection_matrix(); let inv_m = m.inverse();
+        let nx = (screen_pos.x / screen_size.x) * 2.0 - 1.0;
+        let ny = (screen_pos.y / screen_size.y) * 2.0 - 1.0;
+        let p_near = inv_m * Vector4(nx, ny, 0.0, 1.0);
+        let p_far  = inv_m * Vector4(nx, ny, 1.0, 1.0);
+        let w_near = Vector3(p_near.x / p_near.w, p_near.y / p_near.w, p_near.z / p_near.w);
+        let w_far  = Vector3(p_far.x / p_far.w, p_far.y / p_far.w, p_far.z / p_far.w);
+        return Ray(origin: w_near, direction: (w_far - w_near).normalize());
     }
 
-    // Direct 3D box projection
-    pub fn draw_box(self, center: Vector3, size: Vector3, color: Color) {
-        let half = size * 0.5;
-        let c0 = self.project_point(center + Vector3(-half.x, -half.y, -half.z));
-        let c1 = self.project_point(center + Vector3( half.x, -half.y, -half.z));
-        let c2 = self.project_point(center + Vector3( half.x,  half.y, -half.z));
-        let c3 = self.project_point(center + Vector3(-half.x,  half.y, -half.z));
-
-        let c4 = self.project_point(center + Vector3(-half.x, -half.y,  half.z));
-        let c5 = self.project_point(center + Vector3( half.x, -half.y,  half.z));
-        let c6 = self.project_point(center + Vector3( half.x,  half.y,  half.z));
-        let c7 = self.project_point(center + Vector3(-half.x,  half.y,  half.z));
-
-        lane(width: 16) {
-            dispatch render_draw_quad(c0, c1, c2, c3, color);
-            dispatch render_draw_quad(c4, c5, c6, c7, color);
-            dispatch render_draw_line(c0, c4, color);
-            dispatch render_draw_line(c1, c5, color);
-            dispatch render_draw_line(c2, c6, color);
-            dispatch render_draw_line(c3, c7, color);
-        }
+    // 2. Volumetric Ray-AABB Intersection Testing
+    pub fn intersects_box(self, ray: Ray, center: Vector3, size: Vector3) -> bool {
+        let h = size * 0.5; let min = center - h; let max = center + h;
+        let t1 = (min.x - ray.origin.x) / ray.direction.x; let t2 = (max.x - ray.origin.x) / ray.direction.x;
+        let t3 = (min.y - ray.origin.y) / ray.direction.y; let t4 = (max.y - ray.origin.y) / ray.direction.y;
+        let t5 = (min.z - ray.origin.z) / ray.direction.z; let t6 = (max.z - ray.origin.z) / ray.direction.z;
+        let tmin = max(max(min(t1, t2), min(t3, t4)), min(t5, t6));
+        let tmax = min(min(max(t1, t2), max(t3, t4)), max(t5, t6));
+        return tmax >= 0.0 && tmin <= tmax;
     }
 
-    // Direct mesh index iteration without bounds guard
-    pub fn draw_mesh(self, vertices: Array<Vector3>, indices: Array<i32>, color: Color) {
-        let total_indices = indices.length();
+    // 3. Optimized Cache-Localized Instanced Mesh Drawing Engine
+    pub fn draw_mesh_instanced(self, v: Array<Vector3>, idx: Array<i32>, offsets: Array<Vector3>, cmd: RenderCommand) {
+        let (vl, il, sl) = (v.length(), idx.length(), il - (il % 3));
+        if vl == 0 || sl == 0 || cmd.instance_count <= 0 { return; }
         
-        lane(width: 16) {
-            for i in step(0, total_indices, 3) {
-                let v0 = self.project_point(vertices[indices[i]]);
-                let v1 = self.project_point(vertices[indices[i + 1]]);
-                let v2 = self.project_point(vertices[indices[i + 2]]);
-                
-                dispatch render_draw_triangle(v0, v1, v2, color);
+        let cache = Array<Vector2>::allocate(vl);
+        for inst in 0..cmd.instance_count {
+            let ipos = cmd.world_pos + offsets[inst];
+            if !self.is_visible(ipos, cmd.dimensions) || self.is_occluded(ipos, cmd.dimensions) { continue; }
+            
+            lane(width: 16) {
+                for i in 0..vl { cache[i] = self.project_point(v[i] + ipos); }
+                for i in step(0, sl, 3) {
+                    let (i0, i1, i2) = (idx[i], idx[i+1], idx[i+2]);
+                    if i0 >= 0 && i0 < vl && i1 >= 0 && i1 < vl && i2 >= 0 && i2 < vl {
+                        dispatch render_draw_triangle(cache[i0], cache[i1], cache[i2], cmd.color);
+                    }
+                }
             }
         }
     }
 
-    // Strict match statement without wildcard/default fallback
-    pub fn draw_object(self, command: RenderCommand) {
-        match command.prim_type {
-            PrimitiveType.Line => self.draw_line(command.world_pos, command.world_pos + command.dimensions, command.color),
-            PrimitiveType.Box  => self.draw_box(command.world_pos, command.dimensions, command.color),
-            PrimitiveType.Point => {
-                let screen_p = self.project_point(command.world_pos);
-                lane(width: 16) { dispatch render_draw_point(screen_p, command.color); }
-            },
-            PrimitiveType.Triangle => {
-                let p1 = self.project_point(command.world_pos);
-                let p2 = self.project_point(command.world_pos + Vector3(command.dimensions.x, 0.0, 0.0));
-                let p3 = self.project_point(command.world_pos + Vector3(0.0, command.dimensions.y, 0.0));
-                lane(width: 16) { dispatch render_draw_triangle(p1, p2, p3, command.color); }
-            },
-            PrimitiveType.Sphere => {
-                let screen_p = self.project_point(command.world_pos);
-                lane(width: 16) { dispatch render_draw_circle(screen_p, command.dimensions.x, command.color); }
+    // 4. Back-to-Front Painter's Algorithm Depth Sort
+    pub fn sort_and_flush(self, cmds: Array<RenderCommand>, count: usize) {
+        for i in 0..count { cmds[i].depth_key = (cmds[i].world_pos - self.position).length_squared(); }
+        for i in 1..count {
+            let k = cmds[i]; let mut j = i - 1;
+            while j >= 0 && cmds[j].depth_key < k.depth_key { cmds[j+1] = cmds[j]; j -= 1; }
+            cmds[j+1] = k;
+        }
+        for i in 0..count { self.draw_object(cmds[i]); }
+    }
+
+    pub fn draw_object(self, c: RenderCommand) {
+        if c.prim_type == PrimitiveType.Box {
+            if !self.is_visible(c.world_pos, c.dimensions) || self.is_occluded(c.world_pos, c.dimensions) { return; }
+            let h = c.dimensions * 0.5;
+            let c0 = self.project_point(c.world_pos + Vector3(-h.x, -h.y, -h.z));
+            let c1 = self.project_point(c.world_pos + Vector3( h.x, -h.y, -h.z));
+            let c2 = self.project_point(c.world_pos + Vector3( h.x,  h.y, -h.z));
+            let c3 = self.project_point(c.world_pos + Vector3(-h.x,  h.y, -h.z));
+            let c4 = self.project_point(c.world_pos + Vector3(-h.x, -h.y,  h.z));
+            let c5 = self.project_point(c.world_pos + Vector3( h.x, -h.y,  h.z));
+            let c6 = self.project_point(c.world_pos + Vector3( h.x,  h.y,  h.z));
+            let c7 = self.project_point(c.world_pos + Vector3(-h.x,  h.y,  h.z));
+            lane(width: 16) {
+                dispatch render_draw_quad(c0, c1, c2, c3, c.color); dispatch render_draw_quad(c4, c5, c6, c7, c.color);
+                dispatch render_draw_line(c0, c4, c.color); dispatch render_draw_line(c1, c5, c.color);
+                dispatch render_draw_line(c2, c6, c.color); dispatch render_draw_line(c3, c7, c.color);
+            }
+        } else if c.prim_type == PrimitiveType.Point && !self.is_occluded(c.world_pos, Vector3(0.01, 0.01, 0.01)) {
+            let sp = self.project_point(c.world_pos); lane(width: 16) { dispatch render_draw_point(sp, c.color); }
+        } else if c.prim_type == PrimitiveType.Line && self.is_visible(c.world_pos + c.dimensions*0.5, c.dimensions) {
+            let p1 = self.project_point(c.world_pos); let p2 = self.project_point(c.world_pos + c.dimensions);
+            lane(width: 16) { dispatch render_draw_line(p1, p2, c.color); }
+        } else if (c.prim_type == PrimitiveType.Triangle || c.prim_type == PrimitiveType.Sphere) && !self.is_occluded(c.world_pos, c.dimensions) {
+            let sp = self.project_point(c.world_pos);
+            lane(width: 16) {
+                if c.prim_type == PrimitiveType.Sphere { dispatch render_draw_circle(sp, c.dimensions.x, c.color); }
+                else {
+                    let p2 = self.project_point(c.world_pos + Vector3(c.dimensions.x, 0.0, 0.0));
+                    let p3 = self.project_point(c.world_pos + Vector3(0.0, c.dimensions.y, 0.0));
+                    dispatch render_draw_triangle(sp, p2, p3, c.color);
+                }
             }
         }
     }
