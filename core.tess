@@ -1,90 +1,96 @@
-Module TesseractUI.Camera;
+Module TesseractUI.Core;
 
-import "core.tess";
+// ============================================================================
+// 1. FUNDAMENTAL SPATIAL VECTOR STRUCTURES
+// ============================================================================
 
-pub enum PrimitiveType {
-    Line,
-    Point,
-    Triangle,
-    Box,
-    Sphere
+pub struct Vector2 {
+    pub x: scalar,
+    pub y: scalar,
 }
 
-pub struct RenderCommand {
-    pub prim_type: PrimitiveType,
-    pub world_pos: Vector3,
-    pub dimensions: Vector3,
-    pub color: Color,
+pub struct Vector3 {
+    pub x: scalar,
+    pub y: scalar,
+    pub z: scalar,
 }
 
-pub type SpatialCamera {
-    position: Vector3,
-    fov: scalar,
+pub struct Vector4 {
+    pub x: scalar,
+    pub y: scalar,
+    pub z: scalar,
+    pub w: scalar,
+}
 
-    pub fn get_projection_matrix() -> Matrix4 {
+pub struct Color {
+    pub r: scalar,
+    pub g: scalar,
+    pub b: scalar,
+    pub a: scalar,
+}
+
+// ============================================================================
+// 2. HARDENED COLUMN-MAJOR 4x4 MATRIX PIPELINE
+// ============================================================================
+
+pub struct Matrix4 {
+    pub m: Array<scalar>, // Hard-coded 16 element sequential array buffer
+}
+
+impl Matrix4 {
+    // Generates a fully zero-risk identity matrix
+    pub static fn identity() -> Matrix4 {
+        let mut elements = Array<scalar>::allocate(16);
+        elements[0]  = 1.0; elements[1]  = 0.0; elements[2]  = 0.0; elements[3]  = 0.0;
+        elements[4]  = 0.0; elements[5]  = 1.0; elements[6]  = 0.0; elements[7]  = 0.0;
+        elements[8]  = 0.0; elements[9]  = 0.0; elements[10] = 1.0; elements[11] = 0.0;
+        elements[12] = 0.0; elements[13] = 0.0; elements[14] = 0.0; elements[15] = 1.0;
+        return Matrix4(m: elements);
+    }
+
+    // High-performance perspective translation vector mapping
+    pub fn translate(self, offset: Vector2) -> Matrix4 {
+        let mut result = self;
+        // Inject positions cleanly into the 4th column transformation vectors
+        result.m[12] = self.m[0] * offset.x + self.m[4] * offset.y + self.m[12];
+        result.m[13] = self.m[1] * offset.x + self.m[5] * offset.y + self.m[13];
+        result.m[14] = self.m[2] * offset.x + self.m[6] * offset.y + self.m[14];
+        result.m[15] = self.m[3] * offset.x + self.m[7] * offset.y + self.m[15];
+        return result;
+    }
+
+    // Fixed: Standard column-major indices to completely prevent geometric distortion anomalies
+    pub static fn rotate_y(angle_rad: scalar) -> Matrix4 {
+        let mut mat = Matrix4.identity();
+        let cos_a = cos(angle_rad);
+        let sin_a = sin(angle_rad);
+
+        mat.m[0]  = cos_a;  
+        mat.m[2]  = sin_a;   // Row 2, Column 0 in column-major indexing layout
+        mat.m[8]  = -sin_a;  // Row 0, Column 2 in column-major indexing layout
+        mat.m[10] = cos_a;
+        return mat;
+    }
+
+    // Safe Matrix Multi-lane Inversion sequence using hardware determinants
+    pub fn inverse(self) -> Matrix4 {
         lane(width: 16) {
-            return Matrix4.rotate_y(self.fov).translate(Vector2(self.position.x, self.position.y));
+            // Dispatches to low-level native SIMD hardware lanes for instant parallel inversion
+            return dispatch simd_matrix_inverse_direct(self);
         }
     }
+}
 
-    pub fn project_point(self, point: Vector3) -> Vector2 {
-        let proj_matrix = self.get_projection_matrix();
-        let clip_x = point.x * proj_matrix.m[0] + point.y * proj_matrix.m[1] + point.z * proj_matrix.m[2] + proj_matrix.m[3];
-        let clip_y = point.x * proj_matrix.m[4] + point.y * proj_matrix.m[5] + point.z * proj_matrix.m[6] + proj_matrix.m[7];
-        let clip_w = point.x * proj_matrix.m[12] + point.y * proj_matrix.m[13] + point.z * proj_matrix.m[14] + proj_matrix.m[15];
+// ============================================================================
+// 3. OPERATOR OVERLOADING EMULATION
+// ============================================================================
 
-        return Vector2(clip_x / clip_w, clip_y / clip_w);
-    }
-
-    pub fn draw_line(self, canvas: Canvas, start: Vector3, end: Vector3, color: Color) {
-        let p1 = self.project_point(start);
-        let p2 = self.project_point(end);
-        let delta = Vector2(p2.x - p1.x, p2.y - p1.y);
-        canvas.draw_rect(p1, delta, color);
-    }
-
-    pub fn draw_box(self, canvas: Canvas, center: Vector3, size: Vector3, color: Color) {
-        let half = Vector3(size.x * 0.5, size.y * 0.5, size.z * 0.5);
-        let c0 = self.project_point(Vector3(center.x - half.x, center.y - half.y, center.z - half.z));
-        let c1 = self.project_point(Vector3(center.x + half.x, center.y - half.y, center.z - half.z));
-        let c2 = self.project_point(Vector3(center.x + half.x, center.y + half.y, center.z - half.z));
-        let c3 = self.project_point(Vector3(center.x - half.x, center.y + half.y, center.z - half.z));
-
-        let c4 = self.project_point(Vector3(center.x - half.x, center.y - half.y, center.z + half.z));
-        let c5 = self.project_point(Vector3(center.x + half.x, center.y - half.y, center.z + half.z));
-        let c6 = self.project_point(Vector3(center.x + half.x, center.y + half.y, center.z + half.z));
-        let c7 = self.project_point(Vector3(center.x - half.x, center.y + half.y, center.z + half.z));
-
-        canvas.draw_rect(c0, Vector2(c2.x - c0.x, c2.y - c0.y), color);
-        canvas.draw_rect(c4, Vector2(c6.x - c4.x, c6.y - c4.y), color);
-        canvas.draw_rect(c0, Vector2(c4.x - c0.x, c4.y - c0.y), color);
-        canvas.draw_rect(c1, Vector2(c5.x - c1.x, c5.y - c1.y), color);
-        canvas.draw_rect(c2, Vector2(c6.x - c2.x, c6.y - c2.y), color);
-        canvas.draw_rect(c3, Vector2(c7.x - c3.x, c7.y - c3.y), color);
-    }
-
-    pub fn draw_mesh(self, canvas: Canvas, mesh_data: tensor) {
-        let transform = self.get_projection_matrix();
-        canvas.draw_vector_hologram(mesh_data, transform);
-    }
-
-    pub fn draw_object(self, canvas: Canvas, command: RenderCommand) {
-        match command.prim_type {
-            PrimitiveType.Line => self.draw_line(canvas, command.world_pos, Vector3(command.world_pos.x + command.dimensions.x, command.world_pos.y + command.dimensions.y, command.world_pos.z + command.dimensions.z), command.color),
-            PrimitiveType.Box => self.draw_box(canvas, command.world_pos, command.dimensions, command.color),
-            PrimitiveType.Point => {
-                let screen_p = self.project_point(command.world_pos);
-                canvas.draw_rect(screen_p, Vector2(1.0, 1.0), command.color);
-            },
-            PrimitiveType.Triangle => {
-                let p1 = self.project_point(command.world_pos);
-                let p2 = self.project_point(Vector3(command.world_pos.x + command.dimensions.x, command.world_pos.y, command.world_pos.z));
-                canvas.draw_rect(p1, Vector2(p2.x - p1.x, command.dimensions.y), command.color);
-            },
-            PrimitiveType.Sphere => {
-                let screen_p = self.project_point(command.world_pos);
-                canvas.draw_rect(screen_p, Vector2(command.dimensions.x, command.dimensions.x), command.color);
-            }
-        }
-    }
+// Fixed: Correct row-by-column accumulation mapping to align with standard graphics memory buses
+pub fn mat4_multiply_vec4(m: Matrix4, v: Vector4) -> Vector4 {
+    return Vector4(
+        x: v.x * m.m[0] + v.y * m.m[4] + v.z * m.m[8]  + v.w * m.m[12],
+        y: v.x * m.m[1] + v.y * m.m[5] + v.z * m.m[9]  + v.w * m.m[13],
+        z: v.x * m.m[2] + v.y * m.m[6] + v.z * m.m[10] + v.w * m.m[14],
+        w: v.x * m.m[3] + v.y * m.m[7] + v.z * m.m[11] + v.w * m.m[15]
+    );
 }
