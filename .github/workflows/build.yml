@@ -35,21 +35,21 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Advanced: Pre-installs and sets up a decoupled global gradle binary handle
       - name: Setup Gradle Runtime Environment
         uses: gradle/actions/setup-gradle@v3
 
-      # Advanced: Self-healing bootstrap sequence downloads the missing wrapper jar directly from source
-      - name: Bootstrap Missing Gradle Wrapper Binary
+      # Advanced: Native self-healing bootstrap layer generates the wrapper using the system binary pool
+      - name: Bootstrap Missing Gradle Wrapper Core
         run: |
-          mkdir -p gradle/wrapper
-          echo "📥 Bootstrapping official Gradle 9.7.1 wrapper binary..."
-          python3 -c "import urllib.request; urllib.request.urlretrieve('https://githubusercontent.com', 'gradle/wrapper/gradle-wrapper.jar')"
+          echo "⚙️ Regenerating official Gradle wrapper system components natively..."
+          gradle wrapper --gradle-version 9.7.1
           
           # Verify binary asset availability
           if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "✅ Gradle Wrapper Jar successfully restored."
+            echo "✅ Gradle Wrapper Jar successfully restored natively."
           else
-            echo "❌ Failed to download wrapper jar."
+            echo "❌ Failed to generate wrapper core."
             exit 1
           fi
 
