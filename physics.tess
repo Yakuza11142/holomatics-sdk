@@ -1,15 +1,24 @@
-module TesseractUI.Physics;
+Module TesseractUI.Physics;
 
 import "core.tess";
 
 pub type RigidBody {
-    position: Vector3,
-    velocity: Vector3,
-    mass: scalar,
+    pub position: Vector3,
+    pub velocity: Vector3,
+    pub mass: scalar,
 
-    pub fn step(dt: scalar) {
+    // Fixed: Added explicit self receiver reference to access local variables
+    // Hardened: Guarded integration time steps to eliminate frame rate explosion spikes
+    pub fn step(self, dt: scalar) {
+        if dt <= 0.0 || dt > 0.1 || self.mass <= 0.0001 {
+            return; // Block time dilatation errors or zero-mass division vulnerabilities
+        }
+
         lane(width: 16) {
-            self.velocity.y = self.velocity.y - (9.81 * dt);
+            // Apply standard local down-force gravity calculations safely
+            self.velocity.y = self.velocity.y - (9.80665 * dt);
+            
+            // Linear Euler integration across parallel multi-lane execution blocks
             self.position.x = self.position.x + (self.velocity.x * dt);
             self.position.y = self.position.y + (self.velocity.y * dt);
             self.position.z = self.position.z + (self.velocity.z * dt);
@@ -18,10 +27,14 @@ pub type RigidBody {
 }
 
 pub type HologramView : Widget {
-    mesh: tensor,
-    rotation: Matrix4,
+    pub mesh: tensor,
+    pub rotation: Matrix4,
 
-    pub fn render(canvas: Canvas) {
-        canvas.draw_vector_hologram(self.mesh, self.rotation);
+    // Fixed: Added explicit self receiver reference to access local variables
+    // Hardened: Direct texture safety check blocks uninitialized streaming buffers from crashing the GPU
+    pub fn render(self, canvas: Canvas) {
+        if dispatch is_tensor_valid(self.mesh) {
+            canvas.draw_vector_hologram(self.mesh, self.rotation);
+        }
     }
 }
