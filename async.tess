@@ -1,28 +1,62 @@
-Module TesseractUI.Assets;
+Module TesseractUI.Async;
 
-pub type AssetBundle {
-    // Hardened: Implements strict string length validation and hardware alignment checks
-    pub static fn load_mesh(path: string) -> tensor {
-        if path.length() == 0 {
-            return dispatch get_fallback_error_tensor(); // Blocks null pointer processing
+import "core.tess";
+
+pub enum TaskStatus {
+    Pending,
+    Executing,
+    Completed,
+    Faulted
+}
+
+pub struct ComputeTask {
+    pub task_id: u32,
+    pub status: TaskStatus,
+    pub execution_mask: u64,
+}
+
+pub type AsyncTaskManager {
+    active_tasks: Array<ComputeTask>,
+    max_worker_lanes: i32,
+
+    // Hardened: Safely schedules async shaders across multi-lane compute buses
+    pub fn dispatch_parallel_kernel(self, task_id: u32, pipeline_hash: u64) -> bool {
+        if task_id == 0 || pipeline_hash == 0 {
+            return false; // Blocks invalid hardware initialization calls
         }
 
+        // Bound worker threads explicitly to prevent physical lane starvation overshoots
+        let target_width = if self.max_worker_lanes > 0 && self.max_worker_lanes <= 64 { self.max_worker_lanes } else { 16 };
+
         lane(width: 64) {
-            let asset_tensor = dispatch dma_load_mesh_file(path);
-            
-            // Fault-isolation safety check to confirm DMA transfer succeeded
-            return if dispatch is_tensor_valid(asset_tensor) { asset_tensor } else { dispatch get_fallback_error_tensor() };
+            // Allocate execution registers directly on the GPU/NPU pipeline
+            let status_flag = dispatch hw_async_kernel_submit(task_id, pipeline_hash, target_width);
+            return status_flag == 1;
         }
     }
 
-    pub static fn load_texture(path: string) -> tensor {
-        if path.length() == 0 {
-            return dispatch get_fallback_error_tensor();
-        }
+    // Defensive: Checks asynchronous sync barriers to prevent system deadlocks
+    pub fn await_hardware_fence(self, task_id: u32, timeout_us: scalar) -> TaskStatus {
+        if task_id == 0 { return TaskStatus.Faulted; }
+        
+        let mut time_elapsed = 0.0;
+        let safe_timeout = if timeout_us > 0.0 { timeout_us } else { 1000.0 }; // Prevent infinite stalls
 
-        lane(width: 64) {
-            let asset_tensor = dispatch dma_load_texture_file(path);
-            return if dispatch is_tensor_valid(asset_tensor) { asset_tensor } else { dispatch get_fallback_error_tensor() };
+        // Synchronous tracking loop that polls internal hardware fences safely
+        while time_elapsed < safe_timeout {
+            let kernel_state = dispatch hw_query_fence_status(task_id);
+            
+            match kernel_state {
+                2 => { return TaskStatus.Completed; },
+                3 => { return TaskStatus.Faulted; },
+                _ => { 
+                    // Increment and execute a non-blocking hardware back-off yield step
+                    dispatch hw_thread_yield_execution();
+                    time_elapsed = time_elapsed + 1.0; 
+                }
+            }
         }
+        
+        return TaskStatus.Faulted; // Timeout barrier hit, safely break connection out to save the frame
     }
 }
