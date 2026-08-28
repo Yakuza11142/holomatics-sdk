@@ -1,16 +1,60 @@
 MODULE TesseractNetworking;
 
-// P2P Spatial Anchor Binary Packet Serialization
+// 1. Production-Ready Secure Spatial Anchor Serialization Packet Layer
 ROUTINE Tess_SerializeAnchorPacket(dev_id: U32, pos: VEC3, rot: QUAT) -> BUFFER
 BEGIN
-    VAR pkt_buf: BUFFER = ALLOC_BUFFER(36); // Explicit 36-byte target payload
+    // Hardened Boundary Allocation: Expanded safely to 40 bytes to cleanly hold data payload + integrity hash
+    VAR pkt_buf: BUFFER = ALLOC_BUFFER(40); 
     
-    WRITE_U32(pkt_buf, 0, 0x54455353); // Magic Header: 'TESS'
-    WRITE_U32(pkt_buf, 4, dev_id);
-    WRITE_VEC3(pkt_buf, 8, pos);        // 12 Bytes
-    WRITE_QUAT(pkt_buf, 20, rot);       // 16 Bytes
+    IF pkt_buf == NULL THEN
+        RETURN NULL; // Hard structural allocation failure safety guard
+    ENDIF;
+
+    // Explicit Big-Endian (Network Byte Order) Encoding to prevent platform alignment mutations
+    WRITE_U32_BE(pkt_buf, 0, 0x54455353); // Ironclad System Magic Header: 'TESS'
+    WRITE_U32_BE(pkt_buf, 4, dev_id);
+    
+    // Serialize raw tracking elements sequentially across deterministic boundaries
+    WRITE_F32_BE(pkt_buf, 8,  pos.x);
+    WRITE_F32_BE(pkt_buf, 12, pos.y);
+    WRITE_F32_BE(pkt_buf, 16, pos.z);
+    
+    WRITE_F32_BE(pkt_buf, 20, rot.x);
+    WRITE_F32_BE(pkt_buf, 24, rot.y);
+    WRITE_F32_BE(pkt_buf, 28, rot.z);
+    WRITE_F32_BE(pkt_buf, 32, rot.w);
+
+    // 2. Data Integrity Protocol: Generate an explicit CRC32 hash across the entire payload
+    VAR payload_checksum: U32 = COMPUTE_CRC32(pkt_buf, 0, 36);
+    
+    // Store the checksum signature securely into the trailing 4 bytes of the pipeline packet
+    WRITE_U32_BE(pkt_buf, 36, payload_checksum);
 
     RETURN pkt_buf;
+ENDROUTINE;
+
+// 3. Companion Deserialization Validation Filter Routine
+ROUTINE Tess_DeserializeAndVerifyPacket(pkt_buf: BUFFER) -> BOOL
+BEGIN
+    IF pkt_buf == NULL OR GET_BUFFER_SIZE(pkt_buf) < 40 THEN
+        RETURN FALSE;
+    ENDIF;
+
+    // Fast-reject packet fragments if magic signature fails to match 
+    IF READ_U32_BE(pkt_buf, 0) != 0x54455353 THEN
+        RETURN FALSE;
+    ENDIF;
+
+    // Invert verify check: Match recalculation matrix against the network tag marker 
+    VAR received_checksum: U32 = READ_U32_BE(pkt_buf, 36);
+    VAR expected_checksum: U32 = COMPUTE_CRC32(pkt_buf, 0, 36);
+
+    // Drop mutated data immediately to avoid spatial tracking corruption spikes
+    IF received_checksum != expected_checksum THEN
+        RETURN FALSE;
+    ENDIF;
+
+    RETURN TRUE;
 ENDROUTINE;
 
 ENDMODULE;
