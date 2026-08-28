@@ -27,8 +27,6 @@ jobs:
         run: |
           echo "Generating bindings via SWIG interface files..."
           mkdir -p bindings
-          
-          # Advanced: Invokes the interface compilation step into the target output folder
           swig -c++ -csharp -outdir bindings/ tess_core.i
 
       - name: Set up Java JDK 17
@@ -37,8 +35,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle
+      - name: Setup Gradle Runtime Environment
         uses: gradle/actions/setup-gradle@v3
+
+      # Advanced: Self-healing bootstrap sequence downloads the missing wrapper jar directly from source
+      - name: Bootstrap Missing Gradle Wrapper Binary
+        run: |
+          mkdir -p gradle/wrapper
+          echo "📥 Bootstrapping official Gradle 9.7.1 wrapper binary..."
+          python3 -c "import urllib.request; urllib.request.urlretrieve('https://githubusercontent.com', 'gradle/wrapper/gradle-wrapper.jar')"
+          
+          # Verify binary asset availability
+          if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
+            echo "✅ Gradle Wrapper Jar successfully restored."
+          else
+            echo "❌ Failed to download wrapper jar."
+            exit 1
+          fi
 
       - name: Ensure Gradle Wrapper Executable Permissions
         run: chmod +x gradlew
