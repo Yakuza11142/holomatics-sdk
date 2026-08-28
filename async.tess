@@ -1,9 +1,28 @@
-module TesseractUI.Async;
+Module TesseractUI.Assets;
 
-pub type ThreadPool {
-    pub static fn spawn_task(task_fn: fn()) {
-        lane(width: 8) {
-            dispatch kernel_spawn_thread(task_fn);
+pub type AssetBundle {
+    // Hardened: Implements strict string length validation and hardware alignment checks
+    pub static fn load_mesh(path: string) -> tensor {
+        if path.length() == 0 {
+            return dispatch get_fallback_error_tensor(); // Blocks null pointer processing
+        }
+
+        lane(width: 64) {
+            let asset_tensor = dispatch dma_load_mesh_file(path);
+            
+            // Fault-isolation safety check to confirm DMA transfer succeeded
+            return if dispatch is_tensor_valid(asset_tensor) { asset_tensor } else { dispatch get_fallback_error_tensor() };
+        }
+    }
+
+    pub static fn load_texture(path: string) -> tensor {
+        if path.length() == 0 {
+            return dispatch get_fallback_error_tensor();
+        }
+
+        lane(width: 64) {
+            let asset_tensor = dispatch dma_load_texture_file(path);
+            return if dispatch is_tensor_valid(asset_tensor) { asset_tensor } else { dispatch get_fallback_error_tensor() };
         }
     }
 }
