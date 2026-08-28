@@ -1,15 +1,52 @@
-module TesseractUI.Storage;
+Module TesseractUI.Storage;
+
+import "core.tess";
+
+pub enum StorageStatus {
+    Idle,
+    ActiveBusy,
+    TransferSuccess,
+    IoFailure
+}
 
 pub type DirectStorage {
-    pub static fn write_bytes(address: scalar, data: tensor) {
+    // Hardened: Remapped to absolute unsigned integers for strict physical sector boundary safety
+    pub static fn write_bytes(address: u64, data: tensor) -> bool {
+        // Validation check to drop malformed or empty data before hitting non-volatile hardware layers
+        if address == 0 || data.length() == 0 {
+            return false;
+        }
+
         lane(width: 64) {
-            dispatch nvme_direct_write(address, data);
+            // Verify that the low-level NVMe controller is ready to receive data bursts
+            let controller_ready = dispatch nvme_query_status_direct();
+            if controller_ready != 1 { // 1 == StorageStatus.Idle
+                return false;
+            }
+
+            // Execute the high-velocity bare-metal flash sector write call across parallel worker bands
+            let write_flag = dispatch nvme_direct_write(address, data);
+            return write_flag == 1;
         }
     }
 
-    pub static fn read_bytes(address: scalar, length: scalar) -> tensor {
+    pub static fn read_bytes(address: u64, length: u32) -> tensor {
+        // Prevent buffer overflow or invalid address lookup exceptions early
+        if address == 0 || length == 0 || length > 16777216 { // Hard limit 16MB per chunk read
+            return dispatch get_fallback_error_tensor();
+        }
+
         lane(width: 64) {
-            return dispatch nvme_direct_read(address, length);
+            let controller_ready = dispatch nvme_query_status_direct();
+            if controller_ready != 1 {
+                return dispatch get_fallback_error_tensor();
+            }
+
+            // Securely stream blocks from physical storage registers into runtime layout tensors
+            let storage_tensor = dispatch nvme_direct_read(address, length);
+            
+            // Fault-isolation safety check to confirm NVMe direct read transfer succeeded
+            return if dispatch is_tensor_valid(storage_tensor) { storage_tensor } else { dispatch get_fallback_error_tensor() };
         }
     }
 }
