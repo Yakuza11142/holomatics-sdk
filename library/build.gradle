@@ -4,17 +4,18 @@ plugins {
 }
 
 android {
-    namespace 'com.tesseract.ui'
-    compileSdk 34
+    // Fixed: Replaced space-assignment with strict explicit equality mapping
+    namespace = 'com.tesseract.ui'
+    compileSdk = 34
 
     defaultConfig {
-        minSdk 21
-        targetSdk 34
+        minSdk = 21
+        targetSdk = 34
 
         ndk {
             abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86_64'
         }
-        
+
         externalNativeBuild {
             cmake {
                 cppFlags "-std=c++17"
@@ -25,15 +26,15 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
+            minifyEnabled = false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
     externalNativeBuild {
         cmake {
-            path "src/main/cpp/CMakeLists.txt"
-            version "3.22.1"
+            path = "src/main/cpp/CMakeLists.txt"
+            version = "3.22.1"
         }
     }
 
@@ -44,15 +45,16 @@ android {
     }
 }
 
-afterEvaluate {
-    publishing {
-        publications {
-            release(MavenPublication) {
-                from components.release
-                groupId = 'com.github.yourusername'
-                artifactId = 'tess-sdk'
-                version = '1.0.0'
-            }
+// Fixed: Removed heavy afterEvaluate lifecycle hooks to ensure configuration cache compatibility
+publishing {
+    publications {
+        release(MavenPublication) {
+            // Lazy variant component resolution mapping
+            from components.findByName('release')
+            
+            groupId = 'com.github.yourusername'
+            artifactId = 'tess-sdk'
+            version = '1.0.0'
         }
     }
 }
