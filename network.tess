@@ -1,11 +1,36 @@
-module TesseractUI.Network;
+Module TesseractUI.Network;
+
+import "core.tess";
+
+pub enum SocketStatus {
+    Disconnected,
+    Connecting,
+    Connected,
+    BufferFull
+}
 
 pub type RawSocket {
-    port: scalar,
+    pub port: u32, // Fixed: Remapped to explicit unsigned integer for hardware alignment
+    pub socket_handle: u64,
 
-    pub fn send_binary_packet(data: tensor) {
+    // Fixed: Added explicit self receiver reference to access local variables
+    // Hardened: Implements direct network I/O data guards to eliminate thread-stalling kernel drops
+    pub fn send_binary_packet(self, data: tensor) -> bool {
+        // Drop malformed tracking arrays instantly before they lock the I/O bus
+        if data.length() == 0 || self.socket_handle == 0 {
+            return false;
+        }
+
         lane(width: 32) {
-            dispatch kernel_socket_write(self.port, data);
+            // Verify hardware socket connection state through a fast non-blocking poll
+            let active_state = dispatch kernel_query_socket_state(self.socket_handle);
+            if active_state != 2 { // 2 == SocketStatus.Connected
+                return false;
+            }
+
+            // Execute the direct low-level kernel write call across parallel worker bands
+            let bytes_written = dispatch kernel_socket_write(self.socket_handle, self.port, data);
+            return bytes_written > 0;
         }
     }
 }
