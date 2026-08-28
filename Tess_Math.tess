@@ -1,84 +1,131 @@
 MODULE TesseractMath;
 
-// Multi-Surface RANSAC Plane Fitting
+// ----------------------------------------------------------------------------
+// 1. PRODUCTION RANSAC, DISTORTION, AND MATRIX GUARDS
+// ----------------------------------------------------------------------------
 ROUTINE Tess_FitPlaneRANSAC(points_ptr: PTR, count: I32, iter: I32, thresh: F32) -> PLANE3D
 BEGIN
-    VAR best_plane: PLANE3D = PLANE_MAKE(0.0, 0.0, 1.0, 0.0);
-    VAR max_inliers: I32 = 0;
-    
-    IF count < 3 THEN
-        RETURN best_plane;
-    ENDIF;
-
-    LOOP iter TIMES
-        VAR idx1: I32 = RANDOM_INT(0, count - 1);
-        VAR idx2: I32 = RANDOM_INT(0, count - 1);
-        VAR idx3: I32 = RANDOM_INT(0, count - 1);
-
-        // Ensure unique index sampling
-        IF idx1 == idx2 OR idx2 == idx3 OR idx1 == idx3 THEN
-            CONTINUE;
-        ENDIF;
-
-        VAR p1: VEC3 = FETCH_VEC3(points_ptr, idx1);
-        VAR p2: VEC3 = FETCH_VEC3(points_ptr, idx2);
-        VAR p3: VEC3 = FETCH_VEC3(points_ptr, idx3);
-
-        VAR v1: VEC3 = VEC3_SUB(p2, p1);
-        VAR v2: VEC3 = VEC3_SUB(p3, p1);
-        VAR norm: VEC3 = VEC3_CROSS(v1, v2);
-        VAR len_sq: F32 = VEC3_DOT(norm, norm);
-
-        // Avoid degenerate collinear vectors
-        IF len_sq > 0.000001 THEN
-            norm = VEC3_SCALE(norm, 1.0 / MATH_SQRT(len_sq));
-            VAR d: F32 = -VEC3_DOT(norm, p1);
-            VAR inliers: I32 = 0;
-
+    VAR best_plane: PLANE3D = PLANE_MAKE(0.0, 0.0, 1.0, 0.0); VAR max_inliers: I32 = 0;
+    VAR attempts: I32 = 0; VAR max_attempts: I32 = iter * 3;
+    IF count < 3 OR points_ptr == NULL THEN RETURN best_plane; ENDIF;
+    WHILE iter > 0 AND attempts < max_attempts DO
+        attempts = attempts + 1;
+        VAR idx1: I32 = RANDOM_INT(0, count - 1); VAR idx2: I32 = RANDOM_INT(0, count - 1); VAR idx3: I32 = RANDOM_INT(0, count - 1);
+        IF idx1 == idx2 OR idx2 == idx3 OR idx1 == idx3 THEN CONTINUE; ENDIF;
+        VAR p1: VEC3 = FETCH_VEC3(points_ptr, idx1); VAR p2: VEC3 = FETCH_VEC3(points_ptr, idx2); VAR p3: VEC3 = FETCH_VEC3(points_ptr, idx3);
+        VAR v1: VEC3 = VEC3_SUB(p2, p1); VAR v2: VEC3 = VEC3_SUB(p3, p1);
+        VAR norm: VEC3 = VEC3_CROSS(v1, v2); VAR len_sq: F32 = VEC3_DOT(norm, norm);
+        IF len_sq > 0.0001 THEN
+            norm = VEC3_SCALE(norm, 1.0 / MATH_SQRT(len_sq)); VAR d: F32 = -VEC3_DOT(norm, p1); VAR inliers: I32 = 0;
             FOR i FROM 0 TO count - 1 DO
                 VAR pt: VEC3 = FETCH_VEC3(points_ptr, i);
-                VAR dist: F32 = MATH_ABS(VEC3_DOT(norm, pt) + d);
-                IF dist < thresh THEN
-                    inliers = inliers + 1;
-                ENDIF;
+                IF MATH_ABS(VEC3_DOT(norm, pt) + d) < thresh THEN inliers = inliers + 1; ENDIF;
             ENDFOR;
-
-            IF inliers > max_inliers THEN
-                max_inliers = inliers;
-                best_plane = PLANE_MAKE(norm.x, norm.y, norm.z, d);
-            ENDIF;
+            IF inliers > max_inliers THEN max_inliers = inliers; best_plane = PLANE_MAKE(norm.x, norm.y, norm.z, d); ENDIF;
+            iter = iter - 1;
         ENDIF;
-    ENDLOOP;
-
+    ENDWHILE;
     RETURN best_plane;
 ENDROUTINE;
 
-// Lens Distortion Correction with Iterative Safeguard
 ROUTINE Tess_CorrectLensDistortion(u: F32, v: F32, fx: F32, fy: F32, cx: F32, cy: F32, k1: F32, k2: F32, p1: F32, p2: F32) -> VEC2
 BEGIN
-    VAR x: F32 = (u - cx) / fx;
-    VAR y: F32 = (v - cy) / fy;
-    VAR r2: F32 = (x * x) + (y * y);
-    VAR r4: F32 = r2 * r2;
-
-    VAR radial: F32 = 1.0 + (k1 * r2) + (k2 * r4);
-    VAR x_dist: F32 = (x * radial) + (2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x));
-    VAR y_dist: F32 = (y * radial) + (p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y);
-
-    RETURN VEC2_MAKE((x_dist * fx) + cx, (y_dist * fy) + cy);
+    VAR x_dist: F32 = (u - cx) / fx; VAR y_dist: F32 = (v - cy) / fy;
+    VAR x: F32 = x_dist; VAR y: F32 = y_dist;
+    FOR j FROM 0 TO 4 DO
+        VAR r2: F32 = (x * x) + (y * y); VAR r4: F32 = r2 * r2; VAR radial: F32 = 1.0 + (k1 * r2) + (k2 * r4);
+        VAR tx: F32 = 2.0 * p1 * x * y + p2 * (r2 + 2.0 * x * x); VAR ty: F32 = p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y;
+        x = x_dist - (x * (radial - 1.0) + tx); y = y_dist - (y * (radial - 1.0) + ty);
+    ENDFOR;
+    RETURN VEC2_MAKE((x * fx) + cx, (y * fy) + cy);
 ENDROUTINE;
 
-// Matrix Transformation Guard
 ROUTINE Tess_TransformPointSafe(pt: VEC3, mat: MAT4, fallback_pt: VEC3) -> VEC3
 BEGIN
+    IF IS_NAN(pt.x) OR IS_NAN(pt.y) OR IS_NAN(pt.z) THEN RETURN fallback_pt; ENDIF;
     VAR res: VEC4 = MAT4_MUL_VEC4(mat, VEC4_MAKE(pt.x, pt.y, pt.z, 1.0));
+    IF IS_NAN(res.x) OR IS_NAN(res.y) OR IS_NAN(res.z) OR IS_NAN(res.w) OR IS_INF(res.w) OR MATH_ABS(res.w) < 0.00001 THEN RETURN fallback_pt; ENDIF;
+    RETURN VEC3_SCALE(VEC3_MAKE(res.x, res.y, res.z), 1.0 / res.w);
+ENDROUTINE;
 
-    IF IS_NAN(res.x) OR IS_NAN(res.y) OR IS_NAN(res.z) OR IS_INF(res.w) OR MATH_ABS(res.w) < 0.000001 THEN
-        RETURN fallback_pt;
-    ENDIF;
+// ----------------------------------------------------------------------------
+// 2. HARDENED SINGULAR VALUE DECOMPOSITION (SVD 3x3 Engine)
+// ----------------------------------------------------------------------------
+ROUTINE Tess_SolveSVD3x3(mat: MAT3, VAR out_U: MAT3, VAR out_V: MAT3)
+BEGIN
+    out_U = MAT3_IDENTITY(); out_V = MAT3_IDENTITY();
+    // Run 6 Jacobi rotation sweeps to safely diagonalize the symmetric covariance layout
+    FOR sweep FROM 0 TO 5 DO
+        FOR i FROM 0 TO 1 DO
+            FOR j FROM i + 1 TO 2 DO
+                VAR p: F32 = mat.m[i][j];
+                IF MATH_ABS(p) < 0.00001 THEN CONTINUE; ENDIF;
+                VAR h: F32 = mat.m[i][i] - mat.m[j][j]; VAR r: F32 = MATH_SQRT(4.0 * p * p + h * h);
+                VAR c: F32 = 1.0; VAR s: F32 = 0.0;
+                IF r > 0.00001 THEN
+                    c = MATH_SQRT((r + MATH_ABS(h)) / (2.0 * r));
+                    s = (if h >= 0.0 THEN 1.0 else -1.0) * p / (r * c);
+                ENDIF;
+                // Accumulate orthogonal transformation structures cleanly across registers
+                mat = MAT3_APPLY_JACOBI(mat, i, j, c, s);
+                out_U = MAT3_APPLY_JACOBI(out_U, i, j, c, s);
+            ENDFOR;
+        ENDFOR;
+    ENDFOR;
+ENDROUTINE;
 
-    VAR inv_w: F32 = 1.0 / res.w;
-    RETURN VEC3_MAKE(res.x * inv_w, res.y * inv_w, res.z * inv_w);
+// ----------------------------------------------------------------------------
+// 3. CACHE-LOCALIZED ITERATIVE CLOSEST POINT (ICP Alignment Pipeline)
+// ----------------------------------------------------------------------------
+ROUTINE Tess_AlignICP(src_ptr: PTR, dst_ptr: PTR, count: I32, max_iter: I32) -> MAT4
+BEGIN
+    VAR accum_transform: MAT4 = MAT4_IDENTITY();
+    IF count <= 0 OR src_ptr == NULL OR dst_ptr == NULL THEN RETURN accum_transform; ENDIF;
+
+    FOR iter FROM 0 TO max_iter - 1 DO
+        VAR src_centroid: VEC3 = VEC3_ZERO(); VAR dst_centroid: VEC3 = VEC3_ZERO();
+        
+        // Step A: Calculate linear spatial means
+        FOR i FROM 0 TO count - 1 DO
+            src_centroid = VEC3_ADD(src_centroid, FETCH_VEC3(src_ptr, i));
+            dst_centroid = VEC3_ADD(dst_centroid, FETCH_VEC3(dst_ptr, i));
+        ENDFOR;
+        VAR scale: F32 = 1.0 / FLOAT(count);
+        src_centroid = VEC3_SCALE(src_centroid, scale); dst_centroid = VEC3_SCALE(dst_centroid, scale);
+
+        // Step B: Build 3x3 Covariance Cross-Product matrix
+        VAR H: MAT3 = MAT3_ZERO();
+        FOR i FROM 0 TO count - 1 DO
+            VAR s_norm: VEC3 = VEC3_SUB(FETCH_VEC3(src_ptr, i), src_centroid);
+            VAR d_norm: VEC3 = VEC3_SUB(FETCH_VEC3(dst_ptr, i), dst_centroid);
+            H.m[0][0] += s_norm.x * d_norm.x; H.m[0][1] += s_norm.x * d_norm.y; H.m[0][2] += s_norm.x * d_norm.z;
+            H.m[1][0] += s_norm.y * d_norm.x; H.m[1][1] += s_norm.y * d_norm.y; H.m[1][2] += s_norm.y * d_norm.z;
+            H.m[2][0] += s_norm.z * d_norm.x; H.m[2][1] += s_norm.z * d_norm.y; H.m[2][2] += s_norm.z * d_norm.z;
+        ENDFOR;
+
+        // Step C: Unpack spatial constraints using SVD solver
+        VAR U: MAT3 = MAT3_IDENTITY(); VAR V: MAT3 = MAT3_IDENTITY();
+        Tess_SolveSVD3x3(H, U, V);
+
+        // Step D: Extract pure orthogonal rotation and cancel mirroring determinants
+        VAR R: MAT3 = MAT3_MUL(V, MAT3_TRANSPOSE(U));
+        IF MAT3_DETERMINANT(R) < 0.0 THEN
+            V.m[0][2] = -V.m[0][2]; V.m[1][2] = -V.m[1][2]; V.m[2][2] = -V.m[2][2];
+            R = MAT3_MUL(V, MAT3_TRANSPOSE(U));
+        ENDIF;
+
+        // Step E: Compute rigid translation offsets and apply frame delta transforms
+        VAR t: VEC3 = VEC3_SUB(dst_centroid, MAT3_MUL_VEC3(R, src_centroid));
+        VAR step_transform: MAT4 = MAT4_FROM_R_T(R, t);
+        accum_transform = MAT4_MUL(step_transform, accum_transform);
+
+        // Update working data pointers for next optimization loop
+        FOR i FROM 0 TO count - 1 DO
+            STORE_VEC3(src_ptr, i, Tess_TransformPointSafe(FETCH_VEC3(src_ptr, i), step_transform, FETCH_VEC3(src_ptr, i)));
+        ENDFOR;
+    ENDFOR;
+
+    RETURN accum_transform;
 ENDROUTINE;
 
 ENDMODULE;
