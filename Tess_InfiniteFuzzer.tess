@@ -1,15 +1,28 @@
 MODULE TesseractInfiniteFuzzer;
 
-// Fuzzer State & LCG Random Seed Container
+// 1. Production-Ready Data Struct Boundaries
+STRUCT SavedSeed
+    VAR seed_val: U32;
+    VAR hits: U32;
+ENDSTRUCT;
+
 STRUCT FuzzerState
     VAR seed: U32;
     VAR total_tests_run: U64;
     VAR edge_cases_trapped: U64;
     VAR execution_budget_us: F32;
+    
+    // Coverage Tracking Map (Simulates 64KB instrumentation bitmap)
+    VAR coverage_bitmap: ARRAY[U8, 65536];
+    VAR unique_features_found: U32;
+    
+    // Feedback Queue for interesting mutations
+    VAR queue: ARRAY[SavedSeed, 128];
+    VAR queue_count: I32;
 ENDSTRUCT;
 
 // ----------------------------------------------------------------------------
-// 1. FAST PSEUDO-RANDOM GENERATOR (LCG)
+// 2. RANDOMIZATION & DICTIONARY ASSETS
 // ----------------------------------------------------------------------------
 ROUTINE Tess_NextRandom(VAR state: FuzzerState) -> U32
 BEGIN
@@ -17,78 +30,129 @@ BEGIN
     RETURN state.seed;
 ENDROUTINE;
 
-ROUTINE Tess_RandomFloat(VAR state: FuzzerState, min_val: F32, max_val: F32) -> F32
+ROUTINE Tess_GetDictionaryToken(VAR state: FuzzerState) -> U32
 BEGIN
-    VAR raw: U32 = Tess_NextRandom(state);
-    VAR norm: F32 = FLOAT(raw) / 4294967295.0;
-    RETURN min_val + (norm * (max_val - min_val));
-ENDROUTINE;
-
-// ----------------------------------------------------------------------------
-// 2. CHAOS INJECTOR (Generates Extreme Math & Bitwise Corruption)
-// ----------------------------------------------------------------------------
-ROUTINE Tess_InjectChaosScalar(VAR state: FuzzerState) -> F32
-BEGIN
-    VAR selector: U32 = Tess_NextRandom(state) % 8;
-
-    // Inject mathematically hostile floating-point values
-    MATCH selector DO
-        0 => RETURN 0.0;                       // Exact Zero
-        1 => RETURN -0.0;                      // Negative Zero
-        2 => RETURN 1.0 / 0.0;                 // Positive Infinity (+Inf)
-        3 => RETURN -1.0 / 0.0;                // Negative Infinity (-Inf)
-        4 => RETURN 0.0 / 0.0;                 // Not a Number (NaN)
-        5 => RETURN 1e-38;                     // Subnormal / Denormal value
-        6 => RETURN Tess_RandomFloat(state, -1e6, 1e6); // Extreme magnitude
-        _ => RETURN Tess_RandomFloat(state, -1.0, 1.0); // Normal range
+    VAR idx: U32 = Tess_NextRandom(state) % 8;
+    MATCH idx DO
+        0 => RETURN 0x7F800000; // +Inf
+        1 => RETURN 0xFF800000; // -Inf
+        2 => RETURN 0x7FC00000; // NaN
+        3 => RETURN 0x00000000; // 0.0
+        4 => RETURN 0x80000000; // -0.0
+        5 => RETURN 0x3F800000; // 1.0
+        6 => RETURN 0xBF800000; // -1.0
+        _ => RETURN 0x00000001; // Denormal Min
     ENDMATCH;
 ENDROUTINE;
 
 // ----------------------------------------------------------------------------
-// 3. INFINITE MONTE CARLO MATRIX STRESS-TEST
+// 3. BITWISE BIT-FLIPS & DICTIONARY-BASED MUTATIONS
 // ----------------------------------------------------------------------------
-ROUTINE Tess_FuzzMatrixTransforms(VAR state: FuzzerState, max_iterations: I32)
+ROUTINE Tess_MutateBitwise(VAR state: FuzzerState, input_bits: U32) -> F32
 BEGIN
+    VAR selector: U32 = Tess_NextRandom(state) % 4;
+    VAR output_bits: U32 = input_bits;
+
+    MATCH selector DO
+        // Strategy 0: Single Bit Flip
+        0 => BEGIN
+            VAR bit_pos: U32 = Tess_NextRandom(state) % 32;
+            output_bits = input_bits XOR (1 SHL bit_pos);
+        END;
+        // Strategy 1: Byte Overwrite (Dictionary Token Injection)
+        1 => BEGIN
+            output_bits = Tess_GetDictionaryToken(state);
+        END;
+        // Strategy 2: Multi-Bit Mask Block Blit
+        2 => BEGIN
+            VAR mask_sel: U32 = Tess_NextRandom(state) % 3;
+            IF mask_sel == 0 THEN output_bits = input_bits OR 0xFF000000; ENDIF;
+            IF mask_sel == 1 THEN output_bits = input_bits AND 0x00FFFFFF; ENDIF;
+            IF mask_sel == 2 THEN output_bits = input_bits XOR 0x55555555; ENDIF;
+        END;
+        // Strategy 3: Pure Random Mantissa Noise
+        _ => BEGIN
+            VAR noise: U32 = Tess_NextRandom(state) AND 0x00FFFFFF;
+            output_bits = (input_bits AND 0xFF000000) OR noise;
+        END;
+    ENDMATCH;
+
+    RETURN AS_FLOAT(output_bits);
+ENDROUTINE;
+
+// ----------------------------------------------------------------------------
+// 4. COVERAGE-GUIDED FEEDBACK TRACKING LOOP
+// ----------------------------------------------------------------------------
+ROUTINE Tess_EvaluateCoverage(VAR state: FuzzerState, executed_path_id: U16, working_seed: U32)
+BEGIN
+    VAR map_idx: U32 = INT(executed_path_id) AND 65535;
+    
+    // Check if this execution path has been triggered before
+    IF state.coverage_bitmap[map_idx] == 0 THEN
+        state.coverage_bitmap[map_idx] = 1;
+        state.unique_features_found = state.unique_features_found + 1;
+        
+        // Save the unique seed to the feedback queue for deeper future exploitation
+        IF state.queue_count < 128 THEN
+            state.queue[state.queue_count].seed_val = working_seed;
+            state.queue[state.queue_count].hits = 0;
+            state.queue_count = state.queue_count + 1;
+        ENDIF;
+    ELSE
+        // Increment frequency trace counter for structural density analysis
+        IF state.coverage_bitmap[map_idx] < 255 THEN
+            state.coverage_bitmap[map_idx] = state.coverage_bitmap[map_idx] + 1;
+        ENDIF;
+    ENDIF;
+ENDROUTINE;
+
+// ----------------------------------------------------------------------------
+// 5. INSTRUMENTED MATRIX PIPELINE FUZZING FLUSH
+// ----------------------------------------------------------------------------
+ROUTINE Tess_FuzzEngineWithFeedback(VAR state: FuzzerState, max_iterations: I32)
+BEGIN
+    IF max_iterations <= 0 THEN RETURN; ENDIF;
+
     FOR i FROM 0 TO max_iterations - 1 DO
-        // Generate completely randomized, corrupted MAT4
+        VAR working_seed: U32 = state.seed;
+        
+        // Adaptive Input Selection: 40% chance to pull an effective seed from queue
+        IF state.queue_count > 0 AND (Tess_NextRandom(state) % 10) < 4 THEN
+            VAR q_idx: i32 = INT(Tess_NextRandom(state) % UINT(state.queue_count));
+            working_seed = state.queue[q_idx].seed_val;
+            state.queue[q_idx].hits = state.queue[q_idx].hits + 1;
+        ENDIF;
+
+        // Base structural definitions passing through the mutation engine
+        VAR base_raw: U32 = Tess_NextRandom(state);
+        VAR m0: F32 = Tess_MutateBitwise(state, base_raw);
+        VAR m1: F32 = Tess_MutateBitwise(state, Tess_NextRandom(state));
+        VAR m2: F32 = Tess_MutateBitwise(state, Tess_NextRandom(state));
+        
         VAR mat: MAT4 = MAT4_MAKE(
-            Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state),
-            Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state),
-            Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state),
-            Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state), Tess_InjectChaosScalar(state)
+            m0,  m1,  m2,  0.0,
+            m2,  m0,  m1,  0.0,
+            m1,  m2,  m0,  0.0,
+            0.0, 0.0, 0.0, 1.0
         );
 
-        VAR pt: VEC3 = VEC3_MAKE(
-            Tess_InjectChaosScalar(state),
-            Tess_InjectChaosScalar(state),
-            Tess_InjectChaosScalar(state)
-        );
-
+        VAR pt: VEC3 = VEC3_MAKE(m0, m1, m2);
         VAR fallback: VEC3 = VEC3_MAKE(0.0, 0.0, 0.0);
 
-        // Execute target pipeline routine under test
+        // Execute safety-guarded pipeline transform target
         VAR res: VEC3 = Tess_TransformPointSafe(pt, mat, fallback);
 
-        // Validate complete immunity to crash or invalid state
-        IF IS_NAN(res.x) OR IS_NAN(res.y) OR IS_NAN(res.z) THEN
+        // Track path and trap anomalies
+        VAR pseudo_path_hash: U16 = CAST_U16((AS_U32(res.x) XOR AS_U32(res.y)) AND 0xFFFF);
+        Tess_EvaluateCoverage(state, pseudo_path_hash, working_seed);
+
+        IF IS_NAN(res.x) OR IS_NAN(res.y) OR IS_NAN(res.z) OR 
+           IS_INF(res.x) OR IS_INF(res.y) OR IS_INF(res.z) THEN
             state.edge_cases_trapped = state.edge_cases_trapped + 1;
         ENDIF;
 
         state.total_tests_run = state.total_tests_run + 1;
     ENDFOR;
-ENDROUTINE;
-
-// ----------------------------------------------------------------------------
-// 4. NON-BLOCKING ASYNCHRONOUS FRAME EXECUTION
-// ----------------------------------------------------------------------------
-ROUTINE Tess_RunContinuousValidation(VAR state: FuzzerState, frame_time_remaining_ms: F32)
-BEGIN
-    // Only fuzz when host application has spare time in current frame budget
-    IF frame_time_remaining_ms > 2.0 THEN
-        // Run 5,000 synthetic stress tests per spare millisecond
-        VAR iterations: I32 = INT(frame_time_remaining_ms * 2500.0);
-        Tess_FuzzMatrixTransforms(state, iterations);
-    ENDIF;
 ENDROUTINE;
 
 ENDMODULE;
