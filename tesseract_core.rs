@@ -3,6 +3,9 @@
 
 use std::ops::Mul;
 
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::*;
+
 #[repr(C, align(16))]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vec4 {
@@ -43,23 +46,56 @@ impl Mat4 {
         }
     }
 
-    // Fast SIMD-friendly 4x4 matrix multiplication
+    // Production-Ready SIMD 4x4 matrix multiplication
     #[inline(always)]
     pub fn multiply(&self, rhs: &Mat4) -> Mat4 {
-        let mut result = Mat4::identity();
-        for i in 0..4 {
-            let col = rhs.cols[i];
-            result.cols[i] = Vec4::new(
-                self.cols[0].x * col.x + self.cols[1].x * col.y + self.cols[2].x * col.z + self.cols[3].x * col.w,
-                self.cols[0].y * col.x + self.cols[1].y * col.y + self.cols[2].y * col.z + self.cols[3].y * col.w,
-                self.cols[0].z * col.x + self.cols[1].z * col.y + self.cols[2].z * col.z + self.cols[3].z * col.w,
-                self.cols[0].w * col.x + self.cols[1].w * col.y + self.cols[2].w * col.z + self.cols[3].w * col.w,
-            );
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            let mut result = std::mem::maybe_uninit::<Mat4>::uninit();
+            let res_ptr = result.as_mut_ptr() as *mut __m128;
+
+            // Load columns of the left-hand matrix (self) into registers
+            let lhs0 = _mm_load_ps(&self.cols[0] as *const Vec4 as *const f32);
+            let lhs1 = _mm_load_ps(&self.cols[1] as *const Vec4 as *const f32);
+            let lhs2 = _mm_load_ps(&self.cols[2] as *const Vec4 as *const f32);
+            let lhs3 = _mm_load_ps(&self.cols[3] as *const Vec4 as *const f32);
+
+            for i in 0..4 {
+                let rhs_col = _mm_load_ps(&rhs.cols[i] as *const Vec4 as *const f32);
+
+                // Broadcast individual components across register pipelines
+                let xxxx = _mm_shuffle_ps(rhs_col, rhs_col, 0x00);
+                let yyyy = _mm_shuffle_ps(rhs_col, rhs_col, 0x55);
+                let zzzz = _mm_shuffle_ps(rhs_col, rhs_col, 0xAA);
+                let wwww = _mm_shuffle_ps(rhs_col, rhs_col, 0xFF);
+
+                // Perform fused-like horizontal multiply-accumulate across vectors
+                let mut out_col = _mm_mul_ps(lhs0, xxxx);
+                out_col = _mm_add_ps(out_col, _mm_mul_ps(lhs1, yyyy));
+                out_col = _mm_add_ps(out_col, _mm_mul_ps(lhs2, zzzz));
+                out_col = _mm_add_ps(out_col, _mm_mul_ps(lhs3, wwww));
+
+                _mm_store_ps(res_ptr.add(i) as *mut f32, out_col);
+            }
+            result.assume_init()
         }
-        result
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            // Fallback scalar implementation for non-x86_64 architectures (ARM fallback)
+            let mut result = Mat4::identity();
+            for i in 0..4 {
+                let col = rhs.cols[i];
+                result.cols[i] = Vec4::new(
+                    self.cols[0].x * col.x + self.cols[1].x * col.y + self.cols[2].x * col.z + self.cols[3].x * col.w,
+                    self.cols[0].y * col.x + self.cols[1].y * col.y + self.cols[2].y * col.z + self.cols[3].y * col.w,
+                    self.cols[0].z * col.x + self.cols[1].z * col.y + self.cols[2].z * col.z + self.cols[3].z * col.w,
+                    self.cols[0].w * col.x + self.cols[1].w * col.y + self.cols[2].w * col.z + self.cols[3].w * col.w,
+                );
+            }
+            result
+        }
     }
 
-    // Build Floating-Origin Translation Matrix
     #[inline(always)]
     pub fn translation(x: f32, y: f32, z: f32) -> Self {
         let mut m = Self::identity();
@@ -67,7 +103,6 @@ impl Mat4 {
         m
     }
 
-    // Quaternion to 4x4 Rotation Matrix
     #[inline(always)]
     pub fn from_quaternion(q: Vec4) -> Self {
         let (x, y, z, w) = (q.x, q.y, q.z, q.w);
@@ -86,9 +121,47 @@ impl Mat4 {
     }
 }
 
-// Low-Latency Spatial Transformation Pipeline
+impl Mul for Mat4 {
+    type Output = Self;
+    #[inline(always)]
+    fn mul(self, rhs: Self) -> Self {
+        self.multiply(&rhs)
+    }
+}
+
+// Ultra-Low-Latency External C Pipeline Function
 #[no_mangle]
 pub extern "C" fn tesseract_transform_vector(matrix: *const Mat4, vector: *const Vec4, out: *mut Vec4) {
+    // Return early if null pointers are provided
+    if matrix.is_null() || vector.is_null() || out.is_null() {
+        return;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        // Safe 16-byte aligned vector reads directly into modern CPU execution registers
+        let lhs0 = _mm_load_ps(&(*matrix).cols[0] as *const Vec4 as *const f32);
+        let lhs1 = _mm_load_ps(&(*matrix).cols[1] as *const Vec4 as *const f32);
+        let lhs2 = _mm_load_ps(&(*matrix).cols[2] as *const Vec4 as *const f32);
+        let lhs3 = _mm_load_ps(&(*matrix).cols[3] as *const Vec4 as *const f32);
+
+        let v = _mm_load_ps(vector as *const Vec4 as *const f32);
+
+        // Splat broadcast parameters via masks
+        let xxxx = _mm_shuffle_ps(v, v, 0x00);
+        let yyyy = _mm_shuffle_ps(v, v, 0x55);
+        let zzzz = _mm_shuffle_ps(v, v, 0xAA);
+        let wwww = _mm_shuffle_ps(v, v, 0xFF);
+
+        let mut res = _mm_mul_ps(lhs0, xxxx);
+        res = _mm_add_ps(res, _mm_mul_ps(lhs1, yyyy));
+        res = _mm_add_ps(res, _mm_mul_ps(lhs2, zzzz));
+        res = _mm_add_ps(res, _mm_mul_ps(lhs3, wwww));
+
+        _mm_store_ps(out as *mut f32, res);
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
     unsafe {
         let m = &*matrix;
         let v = &*vector;
