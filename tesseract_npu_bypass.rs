@@ -67,6 +67,7 @@ impl HardwareEngineCore {
         let max_len = camera_rgba_pixels.len().saturating_sub(3);
         let mut idx = 0;
         while idx <= max_len {
+            // 0.003921569 == 1.0 / 255.0
             let r = camera_rgba_pixels[idx] as f32 * 0.003921569;
             let g = camera_rgba_pixels[idx + 1] as f32 * 0.003921569;
             let b = camera_rgba_pixels[idx + 2] as f32 * 0.003921569;
@@ -87,52 +88,58 @@ impl HardwareEngineCore {
         let avg_g = sum_g * inv_samples;
         let avg_b = sum_b * inv_samples;
 
+        // Constants for Spherical Harmonics basis functions
         let c0 = 0.282095f32;
         let c1 = 0.488603f32;
-        let c2 = 1.092548f32;
         let c3 = 0.315392f32;
         let c4 = 0.546274f32;
 
-        self.cached_lighting.bands_red[0] = avg_r * c0;
-        self.cached_lighting.bands_red[1] = avg_r * c1 * 0.0;
-        self.cached_lighting.bands_red[2] = avg_r * c1 * 1.0;
-        self.cached_lighting.bands_red[3] = avg_r * c1 * 0.0;
-        self.cached_lighting.bands_red[4] = avg_r * c2 * 0.0;
-        self.cached_lighting.bands_red[5] = avg_r * c2 * 0.0;
-        self.cached_lighting.bands_red[6] = avg_r * c3 * (3.0 * 1.0 - 1.0);
-        self.cached_lighting.bands_red[7] = avg_r * c2 * 0.0;
-        self.cached_lighting.bands_red[8] = avg_r * c4 * 1.0;
+        // Zero out unused registers and optimize horizontal pipeline math
+        self.cached_lighting.bands_red = [
+            avg_r * c0,
+            0.0,
+            avg_r * c1,
+            0.0,
+            0.0,
+            0.0,
+            avg_r * c3 * 2.0,
+            0.0,
+            avg_r * c4,
+        ];
 
-        self.cached_lighting.bands_green[0] = avg_g * c0;
-        self.cached_lighting.bands_green[1] = avg_g * c1 * 0.0;
-        self.cached_lighting.bands_green[2] = avg_g * c1 * 1.0;
-        self.cached_lighting.bands_green[3] = avg_g * c1 * 0.0;
-        self.cached_lighting.bands_green[4] = avg_g * c2 * 0.0;
-        self.cached_lighting.bands_green[5] = avg_g * c2 * 0.0;
-        self.cached_lighting.bands_green[6] = avg_g * c3 * (3.0 * 1.0 - 1.0);
-        self.cached_lighting.bands_green[7] = avg_g * c2 * 0.0;
-        self.cached_lighting.bands_green[8] = avg_g * c4 * 1.0;
+        self.cached_lighting.bands_green = [
+            avg_g * c0,
+            0.0,
+            avg_g * c1,
+            0.0,
+            0.0,
+            0.0,
+            avg_g * c3 * 2.0,
+            0.0,
+            avg_g * c4,
+        ];
 
-        self.cached_lighting.bands_blue[0] = avg_b * c0;
-        self.cached_lighting.bands_blue[1] = avg_b * c1 * 0.0;
-        self.cached_lighting.bands_blue[2] = avg_b * c1 * 1.0;
-        self.cached_lighting.bands_blue[3] = avg_b * c1 * 0.0;
-        self.cached_lighting.bands_blue[4] = avg_b * c2 * 0.0;
-        self.cached_lighting.bands_blue[5] = avg_b * c2 * 0.0;
-        self.cached_lighting.bands_blue[6] = avg_b * c3 * (3.0 * 1.0 - 1.0);
-        self.cached_lighting.bands_blue[7] = avg_b * c2 * 0.0;
-        self.cached_lighting.bands_blue[8] = avg_b * c4 * 1.0;
+        self.cached_lighting.bands_blue = [
+            avg_b * c0,
+            0.0,
+            avg_b * c1,
+            0.0,
+            0.0,
+            0.0,
+            avg_b * c3 * 2.0,
+            0.0,
+            avg_b * c4,
+        ];
 
-        let luminance_r = avg_r * 0.2126;
-        let luminance_g = avg_g * 0.7152;
-        let luminance_b = avg_b * 0.0722;
-        let total_lum = luminance_r + luminance_g + luminance_b;
+        let total_lum = (avg_r * 0.2126) + (avg_g * 0.7152) + (avg_b * 0.0722);
 
         let dir_x = (avg_r - total_lum).clamp(-1.0, 1.0);
         let dir_y = (avg_g - total_lum).clamp(-1.0, 1.0).max(0.1);
         let dir_z = (avg_b - total_lum).clamp(-1.0, 1.0);
 
-        let length_recip = 1.0 / (dir_x * dir_x + dir_y * dir_y + dir_z * dir_z).sqrt();
+        let length_sq = (dir_x * dir_x) + (dir_y * dir_y) + (dir_z * dir_z);
+        let length_recip = if length_sq > 1e-6 { 1.0 / length_sq.sqrt() } else { 1.0 };
+        
         self.cached_lighting.primary_light_direction = [
             dir_x * length_recip,
             dir_y * length_recip,
@@ -141,88 +148,93 @@ impl HardwareEngineCore {
 
         &self.cached_lighting
     }
+}
 
-    #[no_mangle]
-    pub extern "C" fn tesseract_direct_lidar_mesh(
-        lidar_stream: *const HardwareDirectLidarStream,
-        out_meshlet: *mut SiliconMeshlet,
-    ) -> bool {
-        if lidar_stream.is_null() || out_meshlet.is_null() {
-            return false;
-        }
-
-        unsafe {
-            let stream = &*lidar_stream;
-            let mesh = &mut *out_meshlet;
-
-            let points_to_process = (stream.valid_point_count as usize).min(64);
-            if points_to_process < 3 {
-                return false;
-            }
-
-            for i in 0..points_to_process {
-                let base = i * 3;
-                if base + 2 >= stream.raw_depth_points.len() {
-                    return false;
-                }
-
-                let px = stream.raw_depth_points[base];
-                let py = stream.raw_depth_points[base + 1];
-                let pz = stream.raw_depth_points[base + 2];
-
-                mesh.vertices[i] = [px, py, pz];
-            }
-
-            for i in 0..points_to_process {
-                let current_idx = i;
-                let next_idx = (i + 1) % points_to_process;
-                let prev_idx = if i == 0 { points_to_process - 1 } else { i - 1 };
-
-                let v_curr = mesh.vertices[current_idx];
-                let v_next = mesh.vertices[next_idx];
-                let v_prev = mesh.vertices[prev_idx];
-
-                let edge1 = [
-                    v_next[0] - v_curr[0],
-                    v_next[1] - v_curr[1],
-                    v_next[2] - v_curr[2],
-                ];
-                let edge2 = [
-                    v_prev[0] - v_curr[0],
-                    v_prev[1] - v_curr[1],
-                    v_prev[2] - v_curr[2],
-                ];
-
-                let nx = edge1[1] * edge2[2] - edge1[2] * edge2[1];
-                let ny = edge1[2] * edge2[0] - edge1[0] * edge2[2];
-                let nz = edge1[0] * edge2[1] - edge1[1] * edge2[0];
-
-                let len_sq = nx * nx + ny * ny + nz * nz;
-                if len_sq > 1e-6 {
-                    let inv_len = 1.0 / len_sq.sqrt();
-                    mesh.normals[i] = [nx * inv_len, ny * inv_len, nz * inv_len];
-                } else {
-                    mesh.normals[i] = [0.0, 1.0, 0.0];
-                }
-            }
-
-            mesh.vertex_count = points_to_process as u8;
-
-            let mut tri_idx = 0;
-            let max_triangles = points_to_process.saturating_sub(2);
-            for i in 1..=max_triangles {
-                if tri_idx + 2 >= mesh.triangle_indices.len() {
-                    break;
-                }
-                mesh.triangle_indices[tri_idx] = 0;
-                mesh.triangle_indices[tri_idx + 1] = i as u8;
-                mesh.triangle_indices[tri_idx + 2] = (i + 1) as u8;
-                tri_idx += 3;
-            }
-
-            mesh.index_count = tri_idx as u8;
-        }
-
-        true
+// Fixed: Moved outside the impl block to create a valid, linkable cross-language C symbol.
+// Safe FFI implementation to generate hardware meshlets from raw silicon data streams.
+#[no_mangle]
+pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
+    lidar_stream: *const HardwareDirectLidarStream,
+    out_meshlet: *mut SiliconMeshlet,
+) -> bool {
+    if lidar_stream.is_null() || out_meshlet.is_null() {
+        return false;
     }
+
+    let stream = &*lidar_stream;
+    let mesh = &mut *out_meshlet;
+
+    // Fix: Maximum possible vertices we can map safely inside a single meshlet block is 64.
+    // We must also verify that the stream contains enough elements for a valid 3D tuple loop.
+    let max_safe_points_by_bounds = stream.raw_depth_points.len() / 3;
+    let points_to_process = (stream.valid_point_count as usize)
+        .min(64)
+        .min(max_safe_points_by_bounds);
+
+    if points_to_process < 3 {
+        return false;
+    }
+
+    // Populate positions
+    for i in 0..points_to_process {
+        let base = i * 3;
+        mesh.vertices[i] = [
+            stream.raw_depth_points[base],
+            stream.raw_depth_points[base + 1],
+            stream.raw_depth_points[base + 2],
+        ];
+    }
+
+    // Compute surface normals safely using a wrapping ribbon pipeline
+    for i in 0..points_to_process {
+        let current_idx = i;
+        let next_idx = (i + 1) % points_to_process;
+        let prev_idx = if i == 0 { points_to_process - 1 } else { i - 1 };
+
+        let v_curr = mesh.vertices[current_idx];
+        let v_next = mesh.vertices[next_idx];
+        let v_prev = mesh.vertices[prev_idx];
+
+        let edge1 = [
+            v_next[0] - v_curr[0],
+            v_next[1] - v_curr[1],
+            v_next[2] - v_curr[2],
+        ];
+        let edge2 = [
+            v_prev[0] - v_curr[0],
+            v_prev[1] - v_curr[1],
+            v_prev[2] - v_curr[2],
+        ];
+
+        let nx = (edge1[1] * edge2[2]) - (edge1[2] * edge2[1]);
+        let ny = (edge1[2] * edge2[0]) - (edge1[0] * edge2[2]);
+        let nz = (edge1[0] * edge2[1]) - (edge1[1] * edge2[0]);
+
+        let len_sq = (nx * nx) + (ny * ny) + (nz * nz);
+        if len_sq > 1e-6 {
+            let inv_len = 1.0 / len_sq.sqrt();
+            mesh.normals[i] = [nx * inv_len, ny * inv_len, nz * inv_len];
+        } else {
+            mesh.normals[i] = [0.0, 1.0, 0.0]; // Normal Fallback
+        }
+    }
+
+    mesh.vertex_count = points_to_process as u8;
+
+    // Generate indices sequentially
+    let mut tri_idx = 0;
+    let max_triangles = points_to_process.saturating_sub(2);
+    for i in 1..=max_triangles {
+        // Ensure index tracking can never overshoot physical hardware limit of the struct buffer
+        if tri_idx + 2 >= mesh.triangle_indices.len() {
+            break;
+        }
+        mesh.triangle_indices[tri_idx] = 0;
+        mesh.triangle_indices[tri_idx + 1] = i as u8;
+        mesh.triangle_indices[tri_idx + 2] = (i + 1) as u8;
+        tri_idx += 3;
+    }
+
+    mesh.index_count = tri_idx as u8;
+    true
 }
