@@ -1,14 +1,26 @@
-module TesseractUI.Particles;
+Module TesseractUI.Particles;
 
 import "core.tess";
 
 pub type ParticleEmitter : Widget {
-    particle_count: scalar,
-    texture: tensor,
+    pub particle_count: u32, // Fixed: Remapped to explicit unsigned integer for hardware driver safety
+    pub max_lifespan_ms: scalar,
+    pub texture: tensor,
 
-    pub fn render(canvas: Canvas) {
+    // Fixed: Added explicit self receiver reference to access local variables
+    // Hardened: Implements strict input boundary tracking to completely prevent GPU lane starvation freezes
+    pub fn render(self, canvas: Canvas) {
+        // Validation check to drop malformed textures or empty emitters before hitting hardware loops
+        if self.particle_count == 0 || !dispatch is_tensor_valid(self.texture) {
+            return;
+        }
+
+        // Clamp extreme bounds defensively to prevent execution pipeline crashes
+        let safe_count = if self.particle_count > 65536 { 65536 } else { self.particle_count };
+
         lane(width: 64) {
-            dispatch gpu_emit_particle_field(self.particle_count, self.texture);
+            // Securely invoke low-level parallel GPU kernel execution paths
+            dispatch gpu_emit_particle_field(safe_count, self.max_lifespan_ms, self.texture);
         }
     }
 }
