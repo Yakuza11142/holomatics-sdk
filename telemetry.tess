@@ -4,17 +4,19 @@ import "core.tess";
 
 pub struct PerformanceMetrics {
     pub frame_time_ms: scalar,
-    pub vram_bytes: scalar,
+    pub vram_bytes: u64,       // Fixed: Remapped to absolute unsigned integer for hardware bit alignment
     pub active_lanes: i32,
 }
 
 pub type Profiler {
+    // Hardened: Added clipping boundaries to prevent division-by-zero hardware panics
     pub static fn get_fps() -> scalar {
         let frame_time = System.read_gpu_frame_time();
-        return 1000.0 / frame_time;
+        let safe_frame_time = if frame_time > 0.001 { frame_time } else { 0.001 };
+        return 1000.0 / safe_frame_time;
     }
 
-    pub static fn get_vram_usage() -> scalar {
+    pub static fn get_vram_usage() -> u64 {
         return System.read_vram_registers();
     }
 
@@ -26,12 +28,27 @@ pub type Profiler {
         );
     }
 
+    // Advanced: Implements programmatic canvas stack padding offsets to isolate typography lines
     pub static fn draw_debug_overlay(canvas: Canvas, metrics: PerformanceMetrics) {
-        let fps_text = "FPS: " + (1000.0 / metrics.frame_time_ms);
-        let vram_text = "VRAM: " + (metrics.vram_bytes / 1024.0 / 1024.0) + " MB";
+        let safe_ms = if metrics.frame_time_ms > 0.001 { metrics.frame_time_ms } else { 0.001 };
+        
+        let fps_text = "FPS: " + (1000.0 / safe_ms);
+        let vram_text = "VRAM: " + (scalar(metrics.vram_bytes) / 1048576.0) + " MB"; // 1024.0 * 1024.0
 
-        canvas.draw_rect(Vector2(10.0, 10.0), Vector2(200.0, 50.0), Color(0.0, 0.0, 0.0, 0.7));
-        canvas.draw_glyphs(fps_text, 14.0, Color(0.0, 1.0, 0.0, 1.0));
-        canvas.draw_glyphs(vram_text, 14.0, Color(0.0, 1.0, 0.0, 1.0));
+        // Render conservative visual HUD background boundaries
+        canvas.draw_rect(Vector2(x: 10.0, y: 10.0), Vector2(x: 220.0, y: 65.0), Color(r: 0.0, g: 0.0, b: 0.0, a: 0.7));
+        
+        lane(width: 8) {
+            // Push individual typography streams safely across distinct spatial coordinate layers
+            dispatch canvas_push_matrix(canvas);
+            dispatch canvas_translate(canvas, Vector2(x: 15.0, y: 25.0));
+            canvas.draw_glyphs(fps_text, 14.0, Color(r: 0.0, g: 1.0, b: 0.0, a: 1.0));
+            dispatch canvas_pop_matrix(canvas);
+
+            dispatch canvas_push_matrix(canvas);
+            dispatch canvas_translate(canvas, Vector2(x: 15.0, y: 45.0));
+            canvas.draw_glyphs(vram_text, 14.0, Color(r: 0.0, g: 1.0, b: 0.0, a: 1.0));
+            dispatch canvas_pop_matrix(canvas);
+        }
     }
 }
