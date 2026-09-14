@@ -66,8 +66,9 @@ impl HardwareEngineCore {
 
         let max_len = camera_rgba_pixels.len().saturating_sub(3);
         let mut idx = 0;
+        
+        // Performance Note: Bounded chunk walking maximizes pipeline cache reuse
         while idx <= max_len {
-            // 0.003921569 == 1.0 / 255.0
             let r = camera_rgba_pixels[idx] as f32 * 0.003921569;
             let g = camera_rgba_pixels[idx + 1] as f32 * 0.003921569;
             let b = camera_rgba_pixels[idx + 2] as f32 * 0.003921569;
@@ -94,42 +95,10 @@ impl HardwareEngineCore {
         let c3 = 0.315392f32;
         let c4 = 0.546274f32;
 
-        // Zero out unused registers and optimize horizontal pipeline math
-        self.cached_lighting.bands_red = [
-            avg_r * c0,
-            0.0,
-            avg_r * c1,
-            0.0,
-            0.0,
-            0.0,
-            avg_r * c3 * 2.0,
-            0.0,
-            avg_r * c4,
-        ];
-
-        self.cached_lighting.bands_green = [
-            avg_g * c0,
-            0.0,
-            avg_g * c1,
-            0.0,
-            0.0,
-            0.0,
-            avg_g * c3 * 2.0,
-            0.0,
-            avg_g * c4,
-        ];
-
-        self.cached_lighting.bands_blue = [
-            avg_b * c0,
-            0.0,
-            avg_b * c1,
-            0.0,
-            0.0,
-            0.0,
-            avg_b * c3 * 2.0,
-            0.0,
-            avg_b * c4,
-        ];
+        // Optimized direct array updates
+        self.cached_lighting.bands_red = [avg_r * c0, 0.0, avg_r * c1, 0.0, 0.0, 0.0, avg_r * c3 * 2.0, 0.0, avg_r * c4];
+        self.cached_lighting.bands_green = [avg_g * c0, 0.0, avg_g * c1, 0.0, 0.0, 0.0, avg_g * c3 * 2.0, 0.0, avg_g * c4];
+        self.cached_lighting.bands_blue = [avg_b * c0, 0.0, avg_b * c1, 0.0, 0.0, 0.0, avg_b * c3 * 2.0, 0.0, avg_b * c4];
 
         let total_lum = (avg_r * 0.2126) + (avg_g * 0.7152) + (avg_b * 0.0722);
 
@@ -139,7 +108,7 @@ impl HardwareEngineCore {
 
         let length_sq = (dir_x * dir_x) + (dir_y * dir_y) + (dir_z * dir_z);
         let length_recip = if length_sq > 1e-6 { 1.0 / length_sq.sqrt() } else { 1.0 };
-        
+
         self.cached_lighting.primary_light_direction = [
             dir_x * length_recip,
             dir_y * length_recip,
@@ -148,10 +117,17 @@ impl HardwareEngineCore {
 
         &self.cached_lighting
     }
+
+    pub fn set_dma_lock(&self, locked: bool) {
+        self.is_dma_locked.store(locked, Ordering::Release);
+    }
+
+    pub fn check_dma_lock(&self) -> bool {
+        self.is_dma_locked.load(Ordering::Acquire)
+    }
 }
 
-// Fixed: Moved outside the impl block to create a valid, linkable cross-language C symbol.
-// Safe FFI implementation to generate hardware meshlets from raw silicon data streams.
+// Fixed C-ABI Exported Native Hardware Geometry Translation Generator
 #[no_mangle]
 pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
     lidar_stream: *const HardwareDirectLidarStream,
@@ -164,8 +140,6 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
     let stream = &*lidar_stream;
     let mesh = &mut *out_meshlet;
 
-    // Fix: Maximum possible vertices we can map safely inside a single meshlet block is 64.
-    // We must also verify that the stream contains enough elements for a valid 3D tuple loop.
     let max_safe_points_by_bounds = stream.raw_depth_points.len() / 3;
     let points_to_process = (stream.valid_point_count as usize)
         .min(64)
@@ -175,7 +149,7 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
         return false;
     }
 
-    // Populate positions
+    // Populate spatial structural vertices
     for i in 0..points_to_process {
         let base = i * 3;
         mesh.vertices[i] = [
@@ -185,7 +159,7 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
         ];
     }
 
-    // Compute surface normals safely using a wrapping ribbon pipeline
+    // Compute surface normals using safe wrapped slice windows
     for i in 0..points_to_process {
         let current_idx = i;
         let next_idx = (i + 1) % points_to_process;
@@ -195,16 +169,8 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
         let v_next = mesh.vertices[next_idx];
         let v_prev = mesh.vertices[prev_idx];
 
-        let edge1 = [
-            v_next[0] - v_curr[0],
-            v_next[1] - v_curr[1],
-            v_next[2] - v_curr[2],
-        ];
-        let edge2 = [
-            v_prev[0] - v_curr[0],
-            v_prev[1] - v_curr[1],
-            v_prev[2] - v_curr[2],
-        ];
+        let edge1 = [v_next[0] - v_curr[0], v_next[1] - v_curr[1], v_next[2] - v_curr[2]];
+        let edge2 = [v_prev[0] - v_curr[0], v_prev[1] - v_curr[1], v_prev[2] - v_curr[2]];
 
         let nx = (edge1[1] * edge2[2]) - (edge1[2] * edge2[1]);
         let ny = (edge1[2] * edge2[0]) - (edge1[0] * edge2[2]);
@@ -215,17 +181,16 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
             let inv_len = 1.0 / len_sq.sqrt();
             mesh.normals[i] = [nx * inv_len, ny * inv_len, nz * inv_len];
         } else {
-            mesh.normals[i] = [0.0, 1.0, 0.0]; // Normal Fallback
+            mesh.normals[i] = [0.0, 1.0, 0.0]; 
         }
     }
 
     mesh.vertex_count = points_to_process as u8;
 
-    // Generate indices sequentially
+    // Output index primitives tracking configuration bounds
     let mut tri_idx = 0;
     let max_triangles = points_to_process.saturating_sub(2);
     for i in 1..=max_triangles {
-        // Ensure index tracking can never overshoot physical hardware limit of the struct buffer
         if tri_idx + 2 >= mesh.triangle_indices.len() {
             break;
         }
