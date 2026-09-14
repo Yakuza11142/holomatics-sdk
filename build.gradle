@@ -1,3 +1,47 @@
 plugins {
-    id 'com.android.library' version '8.2.2' apply false
+    id 'com.android.library'
+}
+
+android {
+    namespace 'com.holomatics.sdk'
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 21
+        targetSdk 34
+        
+        ndk {
+            abiFilters 'arm64-v8a', 'x86_64', 'armeabi-v7a'
+        }
+        
+        externalNativeBuild {
+            cmake {
+                cppFlags "-std=c++17 -O3"
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    
+    externalNativeBuild {
+        cmake {
+            path "CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+}
+
+dependencies {
+    // FIX 1 & 2: Converted raw multi-string map maps directly to single-string syntax literals
+    implementation "com.android.tools.lint:lint-gradle:31.2.2"
+    implementation "com.android.tools.build:aapt2:8.2.2-10154469:linux"
+
+    // FIX 3: Replaced raw Project object reference tracking with the standard project() path method handler
+    implementation project(':tesseract_core')
 }
