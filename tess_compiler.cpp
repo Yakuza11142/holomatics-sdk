@@ -215,7 +215,6 @@ public:
 
 class CodeGen {
 public:
-    // Pass 1: Analyze and count variable allocations for precise stack sizing
     struct StackLayoutInfo {
         size_t stack_alloc_size;
         size_t var_count;
@@ -229,19 +228,16 @@ public:
             }
         }
 
-        // Each variable takes 4 bytes. Ensure stack allocation is a multiple of 16 bytes (System V ABI compliance).
         size_t raw_space_needed = var_count * 4;
         size_t stack_alloc_size = ((raw_space_needed + 15) / 16) * 16;
         if (stack_alloc_size < 16) {
-            stack_alloc_size = 16; // Minimum 16-byte frame allocation
+            stack_alloc_size = 16;
         }
 
         return {stack_alloc_size, var_count};
     }
 
-    // Pass 2: Emit machine instructions using pre-calculated stack frame metadata
     static std::vector<uint8_t> compile_function(const FunctionNode& func) {
-        // --- Execute Compilation Pass 1: Sizing & Layout Analysis ---
         StackLayoutInfo layout = analyze_stack_frame(func);
 
         std::vector<uint8_t> code;
@@ -261,7 +257,6 @@ public:
         int stack_offset = -4;
         for (const auto& stmt : func.body) {
             if (auto var_decl = dynamic_cast<VarDeclNode*>(stmt.get())) {
-                // Boundary check: ensure local variable does not exceed allocated stack frame
                 if (static_cast<size_t>(-stack_offset) > layout.stack_alloc_size) {
                     throw std::runtime_error("Stack boundary violation: local variables exceed allocated stack frame size.");
                 }
@@ -269,10 +264,20 @@ public:
                 if (auto num_lit = dynamic_cast<NumberLiteralNode*>(var_decl->initializer.get())) {
                     int val = std::stoi(num_lit->value);
                     
-                    // mov dword ptr [rbp + stack_offset], imm32
-                    code.push_back(0xC7); 
-                    code.push_back(0x45); 
-                    code.push_back(static_cast<uint8_t>(stack_offset));
+                    // Adaptive ModR/M displacement selection (8-bit vs 32-bit offset)
+                    if (stack_offset >= -128 && stack_offset <= 127) {
+                        code.push_back(0xC7); 
+                        code.push_back(0x45); 
+                        code.push_back(static_cast<uint8_t>(stack_offset));
+                    } else {
+                        code.push_back(0xC7); 
+                        code.push_back(0x85); 
+                        int32_t off32 = static_cast<int32_t>(stack_offset);
+                        code.push_back(static_cast<uint8_t>(off32 & 0xFF));
+                        code.push_back(static_cast<uint8_t>((off32 >> 8) & 0xFF));
+                        code.push_back(static_cast<uint8_t>((off32 >> 16) & 0xFF));
+                        code.push_back(static_cast<uint8_t>((off32 >> 24) & 0xFF));
+                    }
                     
                     // 32-bit scalar values (Little Endian Encoding)
                     code.push_back(static_cast<uint8_t>(val & 0xFF));
@@ -286,14 +291,11 @@ public:
         }
 
         // --- System Exit Assembly Frame Cleanup (sys_exit layout mapping) ---
-        // mov rax, 60
         code.push_back(0x48); code.push_back(0xC7); code.push_back(0xC0);
         code.push_back(0x3C); code.push_back(0x00); code.push_back(0x00); code.push_back(0x00);
         
-        // xor rdi, rdi
         code.push_back(0x48); code.push_back(0x31); code.push_back(0xFF);
         
-        // syscall
         code.push_back(0x0F); code.push_back(0x05);
 
         // --- Function Epilogue Layout Frame ---
@@ -311,7 +313,6 @@ public:
 class ELFEmitter {
 public:
     static void emit_elf_binary(const std::string& filename, const std::vector<uint8_t>& machine_code) {
-        // Automatically create parent directories if they do not exist to prevent file I/O failures
         std::filesystem::path filepath(filename);
         if (filepath.has_parent_path()) {
             std::filesystem::create_directories(filepath.parent_path());
