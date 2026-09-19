@@ -215,8 +215,13 @@ public:
 
 class CodeGen {
 public:
-    static std::vector<uint8_t> compile_function(const FunctionNode& func) {
-        // --- 1. Static Stack Frame Analysis & Dynamic Allocation Sizing ---
+    // Pass 1: Analyze and count variable allocations for precise stack sizing
+    struct StackLayoutInfo {
+        size_t stack_alloc_size;
+        size_t var_count;
+    };
+
+    static StackLayoutInfo analyze_stack_frame(const FunctionNode& func) {
         size_t var_count = 0;
         for (const auto& stmt : func.body) {
             if (dynamic_cast<VarDeclNode*>(stmt.get())) {
@@ -231,25 +236,33 @@ public:
             stack_alloc_size = 16; // Minimum 16-byte frame allocation
         }
 
+        return {stack_alloc_size, var_count};
+    }
+
+    // Pass 2: Emit machine instructions using pre-calculated stack frame metadata
+    static std::vector<uint8_t> compile_function(const FunctionNode& func) {
+        // --- Execute Compilation Pass 1: Sizing & Layout Analysis ---
+        StackLayoutInfo layout = analyze_stack_frame(func);
+
         std::vector<uint8_t> code;
 
-        // --- 2. Function Prologue Layout Frame ---
+        // --- Function Prologue Layout Frame ---
         code.push_back(0x55);                               // push rbp
         code.push_back(0x48); code.push_back(0x89); code.push_back(0xE5); // mov rbp, rsp
         
         // Emitting dynamic stack allocation: sub rsp, stack_alloc_size
         code.push_back(0x48); code.push_back(0x81); code.push_back(0xEC);
-        code.push_back(static_cast<uint8_t>(stack_alloc_size & 0xFF));
-        code.push_back(static_cast<uint8_t>((stack_alloc_size >> 8) & 0xFF));
-        code.push_back(static_cast<uint8_t>((stack_alloc_size >> 16) & 0xFF));
-        code.push_back(static_cast<uint8_t>((stack_alloc_size >> 24) & 0xFF));
+        code.push_back(static_cast<uint8_t>(layout.stack_alloc_size & 0xFF));
+        code.push_back(static_cast<uint8_t>((layout.stack_alloc_size >> 8) & 0xFF));
+        code.push_back(static_cast<uint8_t>((layout.stack_alloc_size >> 16) & 0xFF));
+        code.push_back(static_cast<uint8_t>((layout.stack_alloc_size >> 24) & 0xFF));
 
-        // --- 3. Abstract Intermediate Semantic Lowering with Boundary Tracking ---
+        // --- Execute Compilation Pass 2: Instruction Emission with Boundary Tracking ---
         int stack_offset = -4;
         for (const auto& stmt : func.body) {
             if (auto var_decl = dynamic_cast<VarDeclNode*>(stmt.get())) {
                 // Boundary check: ensure local variable does not exceed allocated stack frame
-                if (static_cast<size_t>(-stack_offset) > stack_alloc_size) {
+                if (static_cast<size_t>(-stack_offset) > layout.stack_alloc_size) {
                     throw std::runtime_error("Stack boundary violation: local variables exceed allocated stack frame size.");
                 }
 
@@ -272,7 +285,7 @@ public:
             }
         }
 
-        // --- 4. System Exit Assembly Frame Cleanup (sys_exit layout mapping) ---
+        // --- System Exit Assembly Frame Cleanup (sys_exit layout mapping) ---
         // mov rax, 60
         code.push_back(0x48); code.push_back(0xC7); code.push_back(0xC0);
         code.push_back(0x3C); code.push_back(0x00); code.push_back(0x00); code.push_back(0x00);
@@ -283,7 +296,7 @@ public:
         // syscall
         code.push_back(0x0F); code.push_back(0x05);
 
-        // --- 5. Function Epilogue Layout Frame ---
+        // --- Function Epilogue Layout Frame ---
         code.push_back(0xC9); // leave
         code.push_back(0xC3); // ret
 
