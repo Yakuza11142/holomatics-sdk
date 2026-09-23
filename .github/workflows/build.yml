@@ -12,7 +12,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout Source Code
@@ -32,37 +32,36 @@ jobs:
       - name: Set up Java JDK 17
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '17'
 
-      # Advanced: Pre-installs and sets up a decoupled global gradle binary handle
-      - name: Setup Gradle Runtime Environment
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-
-      # Advanced: Native self-healing bootstrap layer generates the wrapper using the system binary pool
-      - name: Bootstrap Missing Gradle Wrapper Core
-        run: |
-          echo "⚙️ Regenerating official Gradle wrapper system components natively..."
-          gradle wrapper --gradle-version 9.7.1
-          
-          # Verify binary asset availability
-          if [ -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "✅ Gradle Wrapper Jar successfully restored natively."
-          else
-            echo "❌ Failed to generate wrapper core."
-            exit 1
-          fi
+        with:
+          gradle-version: '8.10'
+          cache-overwrite-existing: true
 
       - name: Ensure Gradle Wrapper Executable Permissions
-        run: chmod +x gradlew
+        run: |
+          if [ -f "gradlew" ]; then
+            chmod +x gradlew
+          else
+            gradle wrapper --gradle-version 8.10
+            chmod +x gradlew
+          fi
 
       - name: Build & Obfuscate Android SDK (.aar)
-        run: ./gradlew :library:assembleRelease -PminifyEnabled=true --configuration-cache --warning-mode all
+        run: ./gradlew :library:assembleRelease -PminifyEnabled=true --no-daemon
 
       - name: Strip Native Binary Symbols
         run: |
           echo "Stripping native binary symbols from compiled workspace architectures..."
           find library/build/intermediates/ -name "*.so" -exec llvm-strip --strip-unneeded {} \; 2>/dev/null || true
+
+      - name: Verify Generated Outputs
+        run: |
+          echo "Verifying generated AAR files in workspace..."
+          find library/build/outputs/aar/ -type f || echo "Warning: No AAR file produced!"
 
       - name: Upload Language Bindings (C#, Python, Java)
         uses: actions/upload-artifact@v4
@@ -74,4 +73,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: holomatics-sdk-aar
-          path: library/build/outputs/aar/*.aar
+          path: library/build/outputs/aar/**/*.aar
+          if-no-files-found: error
