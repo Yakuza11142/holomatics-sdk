@@ -8,30 +8,31 @@
 #include <cstring>
 #include <unordered_map>
 #include <stdexcept>
-#include <cassert>
+#include <cctype>
 
 // ============================================================================
 // 1. LEXER & TOKENS
 // ============================================================================
 
 enum class TokenType {
-    TOKEN_FN, TOKEN_IDENT, TOKEN_LPAREN, TOKEN_RPAREN, 
-    TOKEN_LBRACE, TOKEN_RBRACE, TOKEN_VEC3, TOKEN_MAT4, 
-    TOKEN_ASSIGN, TOKEN_NUMBER, TOKEN_SEMI, TOKEN_EOF, TOKEN_UNKNOWN
+    TOKEN_FN, TOKEN_IF, TOKEN_ELSE, TOKEN_WHILE, TOKEN_RETURN, TOKEN_LET,
+    TOKEN_IDENT, TOKEN_INT_LIT,
+    TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH, TOKEN_ASSIGN,
+    TOKEN_EQ, TOKEN_NEQ, TOKEN_LT, TOKEN_GT,
+    TOKEN_LPAREN, TOKEN_RPAREN, TOKEN_LBRACE, TOKEN_RBRACE,
+    TOKEN_COMMA, TOKEN_SEMI, TOKEN_COLON,
+    TOKEN_EOF, TOKEN_UNKNOWN
 };
 
 struct Token {
     TokenType type;
     std::string text;
-    size_t line;
-    size_t column;
+    size_t line, col;
 };
 
 class Lexer {
     std::string src;
-    size_t pos = 0;
-    size_t line = 1;
-    size_t col = 1;
+    size_t pos = 0, line = 1, col = 1;
 
 public:
     explicit Lexer(std::string source) : src(std::move(source)) {}
@@ -39,41 +40,68 @@ public:
     Token next_token() {
         while (pos < src.size()) {
             char current = src[pos];
-            if (current == '\n') { line++; col = 1; pos++; continue; }
-            if (isspace(static_cast<unsigned char>(current))) { col++; pos++; continue; }
 
-            if (isalpha(static_cast<unsigned char>(current)) || current == '_') {
+            if (current == '\n') { line++; col = 1; pos++; continue; }
+            if (std::isspace(static_cast<unsigned char>(current))) { col++; pos++; continue; }
+
+            // Skip comments
+            if (current == '/' && pos + 1 < src.size() && src[pos + 1] == '/') {
+                while (pos < src.size() && src[pos] != '\n') pos++;
+                continue;
+            }
+
+            // Identifiers & Keywords
+            if (std::isalpha(static_cast<unsigned char>(current)) || current == '_') {
                 std::string ident;
                 size_t start_col = col;
-                while (pos < src.size() && (isalnum(static_cast<unsigned char>(src[pos])) || src[pos] == '_')) {
-                    ident += src[pos++];
-                    col++;
+                while (pos < src.size() && (std::isalnum(static_cast<unsigned char>(src[pos])) || src[pos] == '_')) {
+                    ident += src[pos++]; col++;
                 }
                 if (ident == "fn") return {TokenType::TOKEN_FN, ident, line, start_col};
-                if (ident == "VEC3") return {TokenType::TOKEN_VEC3, ident, line, start_col};
-                if (ident == "MAT4") return {TokenType::TOKEN_MAT4, ident, line, start_col};
+                if (ident == "if") return {TokenType::TOKEN_IF, ident, line, start_col};
+                if (ident == "else") return {TokenType::TOKEN_ELSE, ident, line, start_col};
+                if (ident == "while") return {TokenType::TOKEN_WHILE, ident, line, start_col};
+                if (ident == "return") return {TokenType::TOKEN_RETURN, ident, line, start_col};
+                if (ident == "let") return {TokenType::TOKEN_LET, ident, line, start_col};
                 return {TokenType::TOKEN_IDENT, ident, line, start_col};
             }
 
-            if (isdigit(static_cast<unsigned char>(current))) {
+            // Integers
+            if (std::isdigit(static_cast<unsigned char>(current))) {
                 std::string num;
                 size_t start_col = col;
-                while (pos < src.size() && isdigit(static_cast<unsigned char>(src[pos]))) {
-                    num += src[pos++];
-                    col++;
+                while (pos < src.size() && std::isdigit(static_cast<unsigned char>(src[pos]))) {
+                    num += src[pos++]; col++;
                 }
-                return {TokenType::TOKEN_NUMBER, num, line, start_col};
+                return {TokenType::TOKEN_INT_LIT, num, line, start_col};
             }
 
+            // Multi-char operators
+            if (pos + 1 < src.size()) {
+                std::string sub = src.substr(pos, 2);
+                size_t start_col = col;
+                if (sub == "==") { pos += 2; col += 2; return {TokenType::TOKEN_EQ, sub, line, start_col}; }
+                if (sub == "!=") { pos += 2; col += 2; return {TokenType::TOKEN_NEQ, sub, line, start_col}; }
+            }
+
+            // Single-char operators
             size_t start_col = col;
             pos++; col++;
             switch (current) {
+                case '+': return {TokenType::TOKEN_PLUS, "+", line, start_col};
+                case '-': return {TokenType::TOKEN_MINUS, "-", line, start_col};
+                case '*': return {TokenType::TOKEN_STAR, "*", line, start_col};
+                case '/': return {TokenType::TOKEN_SLASH, "/", line, start_col};
+                case '=': return {TokenType::TOKEN_ASSIGN, "=", line, start_col};
+                case '<': return {TokenType::TOKEN_LT, "<", line, start_col};
+                case '>': return {TokenType::TOKEN_GT, ">", line, start_col};
                 case '(': return {TokenType::TOKEN_LPAREN, "(", line, start_col};
                 case ')': return {TokenType::TOKEN_RPAREN, ")", line, start_col};
                 case '{': return {TokenType::TOKEN_LBRACE, "{", line, start_col};
                 case '}': return {TokenType::TOKEN_RBRACE, "}", line, start_col};
-                case '=': return {TokenType::TOKEN_ASSIGN, "=", line, start_col};
+                case ',': return {TokenType::TOKEN_COMMA, ",", line, start_col};
                 case ';': return {TokenType::TOKEN_SEMI, ";", line, start_col};
+                case ':': return {TokenType::TOKEN_COLON, ":", line, start_col};
                 default:  return {TokenType::TOKEN_UNKNOWN, std::string(1, current), line, start_col};
             }
         }
@@ -82,283 +110,497 @@ public:
 };
 
 // ============================================================================
-// 2. ABSTRACT SYNTAX TREE (AST)
+// 2. AST NODES
 // ============================================================================
 
-struct ASTNode {
-    virtual ~ASTNode() = default;
-};
-
+struct ASTNode { virtual ~ASTNode() = default; };
 struct ExpressionNode : public ASTNode {};
 
-struct NumberLiteralNode : public ExpressionNode {
-    std::string value;
-    explicit NumberLiteralNode(std::string val) : value(std::move(val)) {}
+struct IntLiteralNode : public ExpressionNode {
+    int64_t value;
+    explicit IntLiteralNode(int64_t v) : value(v) {}
+};
+
+struct IdentifierNode : public ExpressionNode {
+    std::string name;
+    explicit IdentifierNode(std::string n) : name(std::move(n)) {}
+};
+
+struct BinaryOpNode : public ExpressionNode {
+    std::string op;
+    std::unique_ptr<ExpressionNode> left, right;
+    BinaryOpNode(std::string o, std::unique_ptr<ExpressionNode> l, std::unique_ptr<ExpressionNode> r)
+        : op(std::move(o)), left(std::move(l)), right(std::move(r)) {}
 };
 
 struct VarDeclNode : public ASTNode {
-    std::string type_name;
     std::string var_name;
     std::unique_ptr<ExpressionNode> initializer;
+};
 
-    VarDeclNode(std::string type, std::string name, std::unique_ptr<ExpressionNode> init)
-        : type_name(std::move(type)), var_name(std::move(name)), initializer(std::move(init)) {}
+struct AssignmentNode : public ASTNode {
+    std::string var_name;
+    std::unique_ptr<ExpressionNode> value;
+};
+
+struct ExpressionStmtNode : public ASTNode {
+    std::unique_ptr<ExpressionNode> expr;
+    explicit ExpressionStmtNode(std::unique_ptr<ExpressionNode> e) : expr(std::move(e)) {}
+};
+
+struct BlockNode : public ASTNode {
+    std::vector<std::unique_ptr<ASTNode>> statements;
+};
+
+struct IfNode : public ASTNode {
+    std::unique_ptr<ExpressionNode> condition;
+    std::unique_ptr<BlockNode> then_branch;
+    std::unique_ptr<BlockNode> else_branch;
+};
+
+struct WhileNode : public ASTNode {
+    std::unique_ptr<ExpressionNode> condition;
+    std::unique_ptr<BlockNode> body;
+};
+
+struct ReturnNode : public ASTNode {
+    std::unique_ptr<ExpressionNode> value;
 };
 
 struct FunctionNode : public ASTNode {
     std::string name;
-    std::vector<std::unique_ptr<ASTNode>> body;
+    std::vector<std::string> params;
+    std::unique_ptr<BlockNode> body;
 };
 
 // ============================================================================
-// 3. RECURSIVE DESCENT PARSER
+// 3. PARSER
 // ============================================================================
 
 class Parser {
     Lexer lexer;
     Token current_token;
 
-    void advance() {
-        current_token = lexer.next_token();
+    void advance() { current_token = lexer.next_token(); }
+    bool check(TokenType type) const { return current_token.type == type; }
+
+    Token consume(TokenType type, const std::string& err) {
+        if (!check(type)) {
+            throw std::runtime_error("Parser Error [Line " + std::to_string(current_token.line) + "]: " + err);
+        }
+        Token tok = current_token;
+        advance();
+        return tok;
     }
 
-    void consume(TokenType type, const std::string& err_msg) {
-        if (current_token.type != type) {
-            throw std::runtime_error("Parser Error [Line " + std::to_string(current_token.line) + 
-                                     ", Col " + std::to_string(current_token.column) + "]: " + err_msg);
+    int get_precedence(TokenType type) {
+        switch (type) {
+            case TokenType::TOKEN_EQ:
+            case TokenType::TOKEN_NEQ:
+            case TokenType::TOKEN_LT:
+            case TokenType::TOKEN_GT: return 10;
+            case TokenType::TOKEN_PLUS:
+            case TokenType::TOKEN_MINUS: return 20;
+            case TokenType::TOKEN_STAR:
+            case TokenType::TOKEN_SLASH: return 30;
+            default: return 0;
         }
-        advance();
     }
 
 public:
     explicit Parser(Lexer l) : lexer(std::move(l)) { advance(); }
 
-    std::unique_ptr<ExpressionNode> parse_expression() {
-        if (current_token.type == TokenType::TOKEN_NUMBER) {
-            auto node = std::make_unique<NumberLiteralNode>(current_token.text);
+    std::unique_ptr<ExpressionNode> parse_primary() {
+        if (check(TokenType::TOKEN_INT_LIT)) {
+            int64_t val = std::stoll(current_token.text);
             advance();
-            return node;
+            return std::make_unique<IntLiteralNode>(val);
         }
-        throw std::runtime_error("Expected expression layout");
+        if (check(TokenType::TOKEN_IDENT)) {
+            std::string name = current_token.text;
+            advance();
+            return std::make_unique<IdentifierNode>(name);
+        }
+        if (check(TokenType::TOKEN_LPAREN)) {
+            advance();
+            auto expr = parse_expression(0);
+            consume(TokenType::TOKEN_RPAREN, "Expected ')'");
+            return expr;
+        }
+        throw std::runtime_error("Unexpected token in expression: " + current_token.text);
+    }
+
+    std::unique_ptr<ExpressionNode> parse_expression(int min_prec) {
+        auto left = parse_primary();
+        while (true) {
+            int prec = get_precedence(current_token.type);
+            if (prec < min_prec || prec == 0) break;
+
+            std::string op = current_token.text;
+            advance();
+
+            auto right = parse_expression(prec + 1);
+            left = std::make_unique<BinaryOpNode>(op, std::move(left), std::move(right));
+        }
+        return left;
+    }
+
+    std::unique_ptr<BlockNode> parse_block() {
+        consume(TokenType::TOKEN_LBRACE, "Expected '{'");
+        auto block = std::make_unique<BlockNode>();
+        while (!check(TokenType::TOKEN_RBRACE) && !check(TokenType::TOKEN_EOF)) {
+            block->statements.push_back(parse_statement());
+        }
+        consume(TokenType::TOKEN_RBRACE, "Expected '}'");
+        return block;
     }
 
     std::unique_ptr<ASTNode> parse_statement() {
-        if (current_token.type == TokenType::TOKEN_VEC3 || current_token.type == TokenType::TOKEN_MAT4) {
-            std::string type_str = current_token.text;
+        if (check(TokenType::TOKEN_LET)) {
             advance();
-
-            Token ident_tok = current_token;
-            consume(TokenType::TOKEN_IDENT, "Expected variable name identifier following type declaration");
-            
-            consume(TokenType::TOKEN_ASSIGN, "Expected '=' assignment operator in variable declaration");
-            
-            auto expr = parse_expression();
-            consume(TokenType::TOKEN_SEMI, "Missing trailing ';' terminating variable statement context");
-
-            return std::make_unique<VarDeclNode>(type_str, ident_tok.text, std::move(expr));
+            std::string name = consume(TokenType::TOKEN_IDENT, "Expected variable name").text;
+            consume(TokenType::TOKEN_ASSIGN, "Expected '='");
+            auto init = parse_expression(0);
+            if (check(TokenType::TOKEN_SEMI)) advance();
+            auto decl = std::make_unique<VarDeclNode>();
+            decl->var_name = name;
+            decl->initializer = std::move(init);
+            return decl;
         }
-        throw std::runtime_error("Unknown statement sequence encountered");
+
+        if (check(TokenType::TOKEN_RETURN)) {
+            advance();
+            auto ret = std::make_unique<ReturnNode>();
+            if (!check(TokenType::TOKEN_SEMI)) ret->value = parse_expression(0);
+            if (check(TokenType::TOKEN_SEMI)) advance();
+            return ret;
+        }
+
+        if (check(TokenType::TOKEN_IF)) {
+            advance();
+            consume(TokenType::TOKEN_LPAREN, "Expected '(' after if");
+            auto cond = parse_expression(0);
+            consume(TokenType::TOKEN_RPAREN, "Expected ')' after condition");
+            auto then_b = parse_block();
+
+            std::unique_ptr<BlockNode> else_b = nullptr;
+            if (check(TokenType::TOKEN_ELSE)) {
+                advance();
+                else_b = parse_block();
+            }
+
+            auto if_node = std::make_unique<IfNode>();
+            if_node->condition = std::move(cond);
+            if_node->then_branch = std::move(then_b);
+            if_node->else_branch = std::move(else_b);
+            return if_node;
+        }
+
+        if (check(TokenType::TOKEN_WHILE)) {
+            advance();
+            consume(TokenType::TOKEN_LPAREN, "Expected '(' after while");
+            auto cond = parse_expression(0);
+            consume(TokenType::TOKEN_RPAREN, "Expected ')' after condition");
+            auto body = parse_block();
+
+            auto while_node = std::make_unique<WhileNode>();
+            while_node->condition = std::move(cond);
+            while_node->body = std::move(body);
+            return while_node;
+        }
+
+        // Handle assignment or expression statement
+        if (check(TokenType::TOKEN_IDENT)) {
+            Token ident_tok = current_token;
+            advance();
+            if (check(TokenType::TOKEN_ASSIGN)) {
+                advance();
+                auto val = parse_expression(0);
+                if (check(TokenType::TOKEN_SEMI)) advance();
+                auto assign = std::make_unique<AssignmentNode>();
+                assign->var_name = ident_tok.text;
+                assign->value = std::move(val);
+                return assign;
+            } else {
+                // Expression statement fallback
+                auto expr = parse_expression(0);
+                if (check(TokenType::TOKEN_SEMI)) advance();
+                return std::make_unique<ExpressionStmtNode>(std::move(expr));
+            }
+        }
+
+        throw std::runtime_error("Unrecognized statement: " + current_token.text);
     }
 
     std::unique_ptr<FunctionNode> parse_function() {
-        consume(TokenType::TOKEN_FN, "Expected keyword 'fn' to start function declaration structural wrapper");
-        
-        Token func_name_tok = current_token;
-        consume(TokenType::TOKEN_IDENT, "Expected valid subroutine function title string identifier target");
-        
-        consume(TokenType::TOKEN_LPAREN, "Missing '(' symbol surrounding function parameters token frame");
-        consume(TokenType::TOKEN_RPAREN, "Missing ')' symbol surrounding function parameters token frame");
-        consume(TokenType::TOKEN_LBRACE, "Missing opening function statement scoped brace signature '{'");
+        consume(TokenType::TOKEN_FN, "Expected 'fn'");
+        std::string name = consume(TokenType::TOKEN_IDENT, "Expected function name").text;
+        consume(TokenType::TOKEN_LPAREN, "Expected '('");
 
-        auto func = std::make_unique<FunctionNode>();
-        func->name = func_name_tok.text;
+        auto fn = std::make_unique<FunctionNode>();
+        fn->name = name;
 
-        while (current_token.type != TokenType::TOKEN_RBRACE && current_token.type != TokenType::TOKEN_EOF) {
-            func->body.push_back(parse_statement());
+        while (!check(TokenType::TOKEN_RPAREN) && !check(TokenType::TOKEN_EOF)) {
+            std::string pname = consume(TokenType::TOKEN_IDENT, "Expected param name").text;
+            fn->params.push_back(pname);
+            if (check(TokenType::TOKEN_COMMA)) advance();
         }
-        
-        consume(TokenType::TOKEN_RBRACE, "Missing matching scoped function layout close structural brace signature '}'");
-        return func;
+        consume(TokenType::TOKEN_RPAREN, "Expected ')'");
+        fn->body = parse_block();
+        return fn;
     }
 };
 
 // ============================================================================
-// 4. MEMORY ARENA ARCHITECTURE (SAFE BOUNDARY POOL)
-// ============================================================================
-
-class MemoryArena {
-    std::vector<char> pool;
-    size_t offset = 0;
-public:
-    explicit MemoryArena(size_t size = 1024 * 1024) { pool.resize(size); }
-
-    void* allocate(size_t bytes, size_t alignment = 8) {
-        uintptr_t current_ptr = reinterpret_cast<uintptr_t>(pool.data() + offset);
-        size_t padding = (alignment - (current_ptr % alignment)) % alignment;
-        
-        if (offset + padding + bytes > pool.size()) {
-            throw std::runtime_error("Arena allocation threshold overflow: out of available system memory");
-        }
-        
-        offset += padding;
-        void* allocated_address = pool.data() + offset;
-        offset += bytes;
-        return allocated_address;
-    }
-
-    void reset() { offset = 0; }
-};
-
-// ============================================================================
-// 5. PRODUCTION TARGET ARCHITECTURE GENERATOR (BOUNDED x86-64 ASSEMBLER)
+// 4. CODE GENERATOR & ENTRY POINT EMITTER
 // ============================================================================
 
 class CodeGen {
-public:
-    struct StackLayoutInfo {
-        size_t stack_alloc_size;
-        size_t var_count;
-    };
+    std::unordered_map<std::string, int32_t> var_offsets;
+    std::vector<uint8_t> code;
 
-    static StackLayoutInfo analyze_stack_frame(const FunctionNode& func) {
-        size_t var_count = 0;
-        for (const auto& stmt : func.body) {
-            if (dynamic_cast<VarDeclNode*>(stmt.get())) {
-                var_count++;
-            }
-        }
-
-        size_t raw_space_needed = var_count * 4;
-        size_t stack_alloc_size = ((raw_space_needed + 15) / 16) * 16;
-        if (stack_alloc_size < 16) {
-            stack_alloc_size = 16;
-        }
-
-        return {stack_alloc_size, var_count};
+    void emit_bytes(const std::vector<uint8_t>& bytes) {
+        code.insert(code.end(), bytes.begin(), bytes.end());
     }
 
-    static std::vector<uint8_t> compile_function(const FunctionNode& func) {
-        StackLayoutInfo layout = analyze_stack_frame(func);
+    void emit_mov_rbp_offset_eax(int32_t offset) {
+        if (offset >= -128 && offset <= 127) {
+            code.push_back(0x89); code.push_back(0x45);
+            code.push_back(static_cast<uint8_t>(static_cast<int8_t>(offset)));
+        } else {
+            code.push_back(0x89); code.push_back(0x85);
+            uint32_t uoff = static_cast<uint32_t>(offset);
+            emit_bytes({static_cast<uint8_t>(uoff & 0xFF), static_cast<uint8_t>((uoff >> 8) & 0xFF),
+                        static_cast<uint8_t>((uoff >> 16) & 0xFF), static_cast<uint8_t>((uoff >> 24) & 0xFF)});
+        }
+    }
 
-        std::vector<uint8_t> code;
+    void emit_mov_rbp_offset_reg32(int32_t offset, uint8_t reg_code) {
+        code.push_back(0x89);
+        code.push_back(0x45 | ((reg_code & 0x07) << 3));
+        code.push_back(static_cast<uint8_t>(static_cast<int8_t>(offset)));
+    }
 
-        // --- Function Prologue Layout Frame ---
-        code.push_back(0x55);                               // push rbp
-        code.push_back(0x48); code.push_back(0x89); code.push_back(0xE5); // mov rbp, rsp
-        
-        // Emitting dynamic stack allocation: sub rsp, stack_alloc_size
-        code.push_back(0x48); code.push_back(0x81); code.push_back(0xEC);
-        code.push_back(static_cast<uint8_t>(layout.stack_alloc_size & 0xFF));
-        code.push_back(static_cast<uint8_t>((layout.stack_alloc_size >> 8) & 0xFF));
-        code.push_back(static_cast<uint8_t>((layout.stack_alloc_size >> 16) & 0xFF));
-        code.push_back(static_cast<uint8_t>((layout.stack_alloc_size >> 24) & 0xFF));
-
-        // --- Execute Compilation Pass 2: Instruction Emission with Boundary Tracking ---
-        int stack_offset = -4;
-        for (const auto& stmt : func.body) {
-            if (auto var_decl = dynamic_cast<VarDeclNode*>(stmt.get())) {
-                if (static_cast<size_t>(-stack_offset) > layout.stack_alloc_size) {
-                    throw std::runtime_error("Stack boundary violation: local variables exceed allocated stack frame size.");
-                }
-
-                if (auto num_lit = dynamic_cast<NumberLiteralNode*>(var_decl->initializer.get())) {
-                    int val = std::stoi(num_lit->value);
-                    
-                    // Adaptive ModR/M displacement selection (8-bit vs 32-bit offset)
-                    if (stack_offset >= -128 && stack_offset <= 127) {
-                        code.push_back(0xC7); 
-                        code.push_back(0x45); 
-                        code.push_back(static_cast<uint8_t>(stack_offset));
-                    } else {
-                        code.push_back(0xC7); 
-                        code.push_back(0x85); 
-                        int32_t off32 = static_cast<int32_t>(stack_offset);
-                        code.push_back(static_cast<uint8_t>(off32 & 0xFF));
-                        code.push_back(static_cast<uint8_t>((off32 >> 8) & 0xFF));
-                        code.push_back(static_cast<uint8_t>((off32 >> 16) & 0xFF));
-                        code.push_back(static_cast<uint8_t>((off32 >> 24) & 0xFF));
-                    }
-                    
-                    // 32-bit scalar values (Little Endian Encoding)
-                    code.push_back(static_cast<uint8_t>(val & 0xFF));
-                    code.push_back(static_cast<uint8_t>((val >> 8) & 0xFF));
-                    code.push_back(static_cast<uint8_t>((val >> 16) & 0xFF));
-                    code.push_back(static_cast<uint8_t>((val >> 24) & 0xFF));
-                    
-                    stack_offset -= 4;
-                }
-            }
+    void compile_expression(const ExpressionNode* node) {
+        if (auto lit = dynamic_cast<const IntLiteralNode*>(node)) {
+            code.push_back(0xB8); // mov eax, imm32
+            uint32_t val = static_cast<uint32_t>(lit->value);
+            emit_bytes({static_cast<uint8_t>(val & 0xFF), static_cast<uint8_t>((val >> 8) & 0xFF),
+                        static_cast<uint8_t>((val >> 16) & 0xFF), static_cast<uint8_t>((val >> 24) & 0xFF)});
+            return;
         }
 
-        // --- System Exit Assembly Frame Cleanup (sys_exit layout mapping) ---
-        code.push_back(0x48); code.push_back(0xC7); code.push_back(0xC0);
-        code.push_back(0x3C); code.push_back(0x00); code.push_back(0x00); code.push_back(0x00);
-        
-        code.push_back(0x48); code.push_back(0x31); code.push_back(0xFF);
-        
-        code.push_back(0x0F); code.push_back(0x05);
+        if (auto ident = dynamic_cast<const IdentifierNode*>(node)) {
+            if (var_offsets.find(ident->name) == var_offsets.end()) {
+                throw std::runtime_error("Undeclared variable: " + ident->name);
+            }
+            int32_t offset = var_offsets[ident->name];
+            code.push_back(0x8B); code.push_back(0x45);
+            code.push_back(static_cast<uint8_t>(static_cast<int8_t>(offset)));
+            return;
+        }
 
-        // --- Function Epilogue Layout Frame ---
-        code.push_back(0xC9); // leave
-        code.push_back(0xC3); // ret
+        if (auto bin = dynamic_cast<const BinaryOpNode*>(node)) {
+            compile_expression(bin->left.get());
+            code.push_back(0x50); // push rax
+
+            compile_expression(bin->right.get());
+            code.push_back(0x89); code.push_back(0xC1); // mov ecx, eax
+            code.push_back(0x58);                       // pop rax
+
+            if (bin->op == "+") {
+                code.push_back(0x01); code.push_back(0xC8); // add eax, ecx
+            } else if (bin->op == "-") {
+                code.push_back(0x29); code.push_back(0xC8); // sub eax, ecx
+            } else if (bin->op == "*") {
+                code.push_back(0x0F); code.push_back(0xAF); code.push_back(0xC1); // imul eax, ecx
+            } else if (bin->op == "/") {
+                code.push_back(0x99);                       // cdq
+                code.push_back(0xF7); code.push_back(0xF9); // idiv ecx
+            } else if (bin->op == "<" || bin->op == ">" || bin->op == "==" || bin->op == "!=") {
+                code.push_back(0x39); code.push_back(0xC8); // cmp eax, ecx
+                code.push_back(0x0F);                       // setcc al
+                if (bin->op == "<")  code.push_back(0x9C);
+                if (bin->op == ">")  code.push_back(0x9F);
+                if (bin->op == "==") code.push_back(0x94);
+                if (bin->op == "!=") code.push_back(0x95);
+                code.push_back(0x0F); code.push_back(0xB6); code.push_back(0xC0); // movzx eax, al
+            }
+            return;
+        }
+    }
+
+    void scan_vars(const ASTNode* stmt, int32_t& current_offset) {
+        if (auto var = dynamic_cast<const VarDeclNode*>(stmt)) {
+            if (var_offsets.find(var->var_name) == var_offsets.end()) {
+                var_offsets[var->var_name] = current_offset;
+                current_offset -= 4;
+            }
+        } else if (auto block = dynamic_cast<const BlockNode*>(stmt)) {
+            for (const auto& s : block->statements) scan_vars(s.get(), current_offset);
+        } else if (auto if_node = dynamic_cast<const IfNode*>(stmt)) {
+            scan_vars(if_node->then_branch.get(), current_offset);
+            if (if_node->else_branch) scan_vars(if_node->else_branch.get(), current_offset);
+        } else if (auto while_node = dynamic_cast<const WhileNode*>(stmt)) {
+            scan_vars(while_node->body.get(), current_offset);
+        }
+    }
+
+public:
+    void compile_statement(const ASTNode* stmt) {
+        if (auto var = dynamic_cast<const VarDeclNode*>(stmt)) {
+            compile_expression(var->initializer.get());
+            emit_mov_rbp_offset_eax(var_offsets[var->var_name]);
+        } else if (auto assign = dynamic_cast<const AssignmentNode*>(stmt)) {
+            compile_expression(assign->value.get());
+            emit_mov_rbp_offset_eax(var_offsets[assign->var_name]);
+        } else if (auto expr_stmt = dynamic_cast<const ExpressionStmtNode*>(stmt)) {
+            compile_expression(expr_stmt->expr.get());
+        } else if (auto ret = dynamic_cast<const ReturnNode*>(stmt)) {
+            if (ret->value) compile_expression(ret->value.get());
+            code.push_back(0x48); code.push_back(0x89); code.push_back(0xEC); // mov rsp, rbp
+            code.push_back(0x5D);                                             // pop rbp
+            code.push_back(0xC3);                                             // ret
+        } else if (auto block = dynamic_cast<const BlockNode*>(stmt)) {
+            for (const auto& s : block->statements) compile_statement(s.get());
+        } else if (auto if_node = dynamic_cast<const IfNode*>(stmt)) {
+            compile_expression(if_node->condition.get());
+            code.push_back(0x85); code.push_back(0xC0); // test eax, eax
+
+            code.push_back(0x0F); code.push_back(0x84);
+            size_t je_patch_pos = code.size();
+            emit_bytes({0, 0, 0, 0});
+
+            compile_statement(if_node->then_branch.get());
+
+            code.push_back(0xE9);
+            size_t jmp_patch_pos = code.size();
+            emit_bytes({0, 0, 0, 0});
+
+            int32_t else_offset = static_cast<int32_t>(code.size() - (je_patch_pos + 4));
+            std::memcpy(&code[je_patch_pos], &else_offset, sizeof(else_offset));
+
+            if (if_node->else_branch) {
+                compile_statement(if_node->else_branch.get());
+            }
+
+            int32_t exit_offset = static_cast<int32_t>(code.size() - (jmp_patch_pos + 4));
+            std::memcpy(&code[jmp_patch_pos], &exit_offset, sizeof(exit_offset));
+        } else if (auto while_node = dynamic_cast<const WhileNode*>(stmt)) {
+            size_t loop_start = code.size();
+            compile_expression(while_node->condition.get());
+            code.push_back(0x85); code.push_back(0xC0); // test eax, eax
+
+            code.push_back(0x0F); code.push_back(0x84);
+            size_t exit_patch_pos = code.size();
+            emit_bytes({0, 0, 0, 0});
+
+            compile_statement(while_node->body.get());
+
+            code.push_back(0xE9);
+            int32_t jump_back = static_cast<int32_t>(loop_start - (code.size() + 4));
+            uint32_t ujump = static_cast<uint32_t>(jump_back);
+            emit_bytes({static_cast<uint8_t>(ujump & 0xFF), static_cast<uint8_t>((ujump >> 8) & 0xFF),
+                        static_cast<uint8_t>((ujump >> 16) & 0xFF), static_cast<uint8_t>((ujump >> 24) & 0xFF)});
+
+            int32_t exit_offset = static_cast<int32_t>(code.size() - (exit_patch_pos + 4));
+            std::memcpy(&code[exit_patch_pos], &exit_offset, sizeof(exit_offset));
+        }
+    }
+
+    std::vector<uint8_t> generate(const FunctionNode& func) {
+        // --- 1. Generate Runtime Entry Point Stub (_start) ---
+        // xor rdi, rdi; xor rsi, rsi; call main; mov rdi, rax; mov rax, 60; syscall;
+        std::vector<uint8_t> start_stub = {
+            0x48, 0x31, 0xFF,                         // xor rdi, rdi
+            0x48, 0x31, 0xF6,                         // xor rsi, rsi
+            0xE8, 0x0C, 0x00, 0x00, 0x00,             // call main (12 bytes forward)
+            0x48, 0x89, 0xC7,                         // mov rdi, rax
+            0x48, 0xC7, 0xC0, 0x3C, 0x00, 0x00, 0x00, // mov rax, 60 (sys_exit)
+            0x0F, 0x05                                // syscall
+        };
+        emit_bytes(start_stub);
+
+        // --- 2. Generate Main Function ---
+        int32_t current_offset = -4;
+        for (const auto& param : func.params) {
+            var_offsets[param] = current_offset;
+            current_offset -= 4;
+        }
+
+        scan_vars(func.body.get(), current_offset);
+
+        size_t raw_space = var_offsets.size() * 4;
+        size_t stack_alloc = ((raw_space + 15) / 16) * 16 + 8;
+
+        // Prologue
+        code.push_back(0x55); // push rbp
+        code.push_back(0x48); code.push_back(0x89); code.push_back(0xE5); // mov rbp, rsp
+        code.push_back(0x48); code.push_back(0x81); code.push_back(0xEC); // sub rsp, alloc
+        uint32_t sz = static_cast<uint32_t>(stack_alloc);
+        emit_bytes({static_cast<uint8_t>(sz & 0xFF), static_cast<uint8_t>((sz >> 8) & 0xFF),
+                    static_cast<uint8_t>((sz >> 16) & 0xFF), static_cast<uint8_t>((sz >> 24) & 0xFF)});
+
+        // Spill parameter registers
+        uint8_t param_regs[] = {7, 6, 2, 1}; // rdi, rsi, rdx, rcx
+        for (size_t i = 0; i < func.params.size() && i < 4; ++i) {
+            emit_mov_rbp_offset_reg32(var_offsets[func.params[i]], param_regs[i]);
+        }
+
+        // Body Execution
+        compile_statement(func.body.get());
+
+        // Default epilogue fallback
+        code.push_back(0x48); code.push_back(0x89); code.push_back(0xEC); // mov rsp, rbp
+        code.push_back(0x5D);                                             // pop rbp
+        code.push_back(0xC3);                                             // ret
 
         return code;
     }
 };
 
 // ============================================================================
-// 6. NATIVE COMPLIANT ELF BINARY EMITTER (SYSTEM LINUX TARGET LOADER)
+// 5. ELF LINKER
 // ============================================================================
 
 class ELFEmitter {
 public:
-    static void emit_elf_binary(const std::string& filename, const std::vector<uint8_t>& machine_code) {
+    static void write_executable(const std::string& filename, const std::vector<uint8_t>& machine_code) {
         std::filesystem::path filepath(filename);
         if (filepath.has_parent_path()) {
             std::filesystem::create_directories(filepath.parent_path());
         }
 
         std::ofstream outfile(filename, std::ios::out | std::ios::binary);
-        if (!outfile) {
-            throw std::runtime_error("Failed to generate target physical executable payload at path: " + filename);
-        }
+        if (!outfile) throw std::runtime_error("Could not create output executable: " + filename);
 
-        uint64_t entry_point = 0x400078; 
+        uint64_t entry_point = 0x400078; // Start offset pointing to _start
         uint64_t full_segment_file_size = 64 + 56 + machine_code.size();
 
         unsigned char elf_header[64] = {
-            0x7F, 'E', 'L', 'F',             
-            2,                               
-            1,                               
-            1,                               
-            0,                               
-            0, 0, 0, 0, 0, 0, 0, 0,          
-            2, 0,                            
-            38, 0,                           
-            1, 0, 0, 0,                      
+            0x7F, 'E', 'L', 'F', 2, 1, 1, 0,
+            0, 0, 0, 0, 0, 0, 0, 0,
+            2, 0, 38, 0, 1, 0, 0, 0
         };
 
         std::memcpy(&elf_header[24], &entry_point, sizeof(entry_point));
-
-        uint64_t phoff = 64; 
+        uint64_t phoff = 64;
         std::memcpy(&elf_header[32], &phoff, sizeof(phoff));
 
-        elf_header[52] = 64;                 
-        elf_header[54] = 56;                 
-        elf_header[56] = 1;                  
+        elf_header[52] = 64; elf_header[54] = 56; elf_header[56] = 1;
 
         unsigned char program_header[56] = {
-            1, 0, 0, 0,                      
-            5, 0, 0, 0,                      
+            1, 0, 0, 0,
+            5, 0, 0, 0
         };
 
         uint64_t zero_offset = 0;
         uint64_t vaddr = 0x400000;
-        std::memcpy(&program_header[8],  &zero_offset,           sizeof(zero_offset)); 
-        std::memcpy(&program_header[16], &vaddr,                 sizeof(vaddr));       
-        std::memcpy(&program_header[24], &vaddr,                 sizeof(vaddr));       
-        std::memcpy(&program_header[32], &full_segment_file_size, sizeof(full_segment_file_size)); 
-        std::memcpy(&program_header[40], &full_segment_file_size, sizeof(full_segment_file_size)); 
+        std::memcpy(&program_header[8],  &zero_offset, sizeof(zero_offset));
+        std::memcpy(&program_header[16], &vaddr, sizeof(vaddr));
+        std::memcpy(&program_header[24], &vaddr, sizeof(vaddr));
+        std::memcpy(&program_header[32], &full_segment_file_size, sizeof(full_segment_file_size));
+        std::memcpy(&program_header[40], &full_segment_file_size, sizeof(full_segment_file_size));
 
         uint64_t align_val = 0x200000;
         std::memcpy(&program_header[48], &align_val, sizeof(align_val));
@@ -368,41 +610,52 @@ public:
         outfile.write(reinterpret_cast<const char*>(machine_code.data()), machine_code.size());
 
         outfile.close();
-        std::cout << "[ELF Emission Stage Successful]: Native running binary compiled safely to -> " << filename << "\n";
+
+        std::filesystem::permissions(filename, std::filesystem::perms::owner_exec | std::filesystem::perms::owner_read | std::filesystem::perms::owner_write, std::filesystem::perm_options::add);
     }
 };
 
 // ============================================================================
-// 7. COMPILER ENGINE SYSTEM PIPELINE INTEGRATION RUNTIME
+// 6. DRIVER & TEST SUITE
 // ============================================================================
 
 int main() {
     try {
-        std::string source_code = "fn main() { VEC3 pos = 100; }";
-        std::cout << "[Initializing Structural Workspace Compile Pass Over String Payload Block Data]...\n";
+        std::string source_code = R"(
+            fn main(a, b) {
+                let x = a + 50 * 2;
+                if (x > 100) {
+                    x = x / 2;
+                } else {
+                    x = x + 10;
+                }
 
+                while (x < 150) {
+                    x = x + 1;
+                }
+
+                return x;
+            }
+        )";
+
+        std::cout << "[Compiler Engine]: Parsing source program...\n";
         Lexer lexer(source_code);
         Parser parser(std::move(lexer));
-        auto ast_root_node = parser.parse_function();
+        auto ast = parser.parse_function();
 
-        if (ast_root_node) {
-            std::cout << "[AST Construction Phase Validated]: High-level function routine identified successfully -> " << ast_root_node->name << "\n";
-        }
+        std::cout << "[Compiler Engine]: Lowering to x86-64 native instructions...\n";
+        CodeGen codegen;
+        std::vector<uint8_t> machine_code = codegen.generate(*ast);
 
-        MemoryArena hardware_arena;
-        void* simd_aligned_block_pointer = hardware_arena.allocate(256, 32); 
-        if (simd_aligned_block_pointer) {
-            std::cout << "[Memory Arena Subsystem Active]: Aligned payload blocks extracted securely.\n";
-        }
+        std::cout << "[Compiler Engine]: Linking ELF binary target...\n";
+        ELFEmitter::write_executable("generated_binary", machine_code);
 
-        std::vector<uint8_t> runtime_native_machine_instructions = CodeGen::compile_function(*ast_root_node);
+        std::cout << "[Success]: Binary compiled (" << machine_code.size() 
+                  << " bytes). Execute with './generated_binary; echo $?'\n";
 
-        ELFEmitter::emit_elf_binary("generated/tesseract_sdk", runtime_native_machine_instructions);
-
-    } catch (const std::exception& error_trace_log) {
-        std::cerr << "\n[Fatal Execution Compiler Break Down]: " << error_trace_log.what() << "\n";
+    } catch (const std::exception& e) {
+        std::cerr << "\n[Fatal Compiler Exception]: " << e.what() << "\n";
         return 1;
     }
-
     return 0;
 }
