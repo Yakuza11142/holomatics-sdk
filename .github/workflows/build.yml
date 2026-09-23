@@ -35,20 +35,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Setup Gradle
+      - name: Setup Gradle Runtime Environment
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.10'
-          cache-overwrite-existing: true
 
-      - name: Ensure Gradle Wrapper Executable Permissions
+      - name: Generate Missing Wrapper Jar & Set Permissions
         run: |
-          if [ -f "gradlew" ]; then
-            chmod +x gradlew
-          else
-            gradle wrapper --gradle-version 8.10
-            chmod +x gradlew
-          fi
+          gradle wrapper --gradle-version 8.10
+          chmod +x gradlew
 
       - name: Build & Obfuscate Android SDK (.aar)
         run: ./gradlew :library:assembleRelease -PminifyEnabled=true --no-daemon
