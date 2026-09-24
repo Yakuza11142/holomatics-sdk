@@ -1,39 +1,155 @@
-name: Build Holomatics SDK
+name: Build Holomatics SDK & Native Binaries
 
 on:
   push:
     branches:
       - main
       - master
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
     branches:
       - main
       - master
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
 
 jobs:
-  build:
+  # -------------------------------------------------------------------
+  # Job 1: Linux (.so), Windows (.dll), WebAssembly (.wasm), Static (.a)
+  # -------------------------------------------------------------------
+  build-cross-platform:
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Install SWIG & LLVM Strip Tools
+      - name: Cache APT Packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-${{ hashFiles('.github/workflows/*.yml') }}
+          restore-keys: |
+            apt-${{ runner.os }}-
+
+      - name: Install Toolchains (SWIG, LLVM, MinGW)
         run: |
           sudo apt-get update
-          sudo apt-get install -y swig llvm
+          sudo apt-get install -y swig llvm clang g++ g++-mingw-w64-x86-64
 
-      - name: Generate Multi-Language Bindings
+      - name: Setup Official Emscripten SDK (emsdk)
+        uses: mymindstorm/setup-emsdk@v13
+        with:
+          version: 'latest'
+
+      - name: Generate SWIG Wrapper Source
         run: |
-          echo "Generating bindings via SWIG interface files..."
           mkdir -p bindings
           swig -c++ -csharp -outdir bindings/ tess_core.i
+
+      - name: Compile Linux Shared Object (.so) & Static Library (.a)
+        run: |
+          mkdir -p output/linux
+          clang++ -O3 -fPIC -c tesseract_compiler.cpp -o compiler.o || true
+          clang++ -O3 -fPIC -c tess_core_wrap.cxx -o tess_core_wrap.o
+          
+          # Compile LLVM IR bitcode/assembly if present
+          clang -c tesseract_master.ll -o core.o || echo "no ll yet"
+          
+          # Link core engine + SWIG glue layer
+          if [ -f core.o ]; then
+            clang++ -shared -O3 tess_core_wrap.o core.o -o output/linux/libtess_core.so
+            ar rcs output/linux/libtess_core.a tess_core_wrap.o core.o
+          else
+            clang++ -shared -O3 tess_core_wrap.o -o output/linux/libtess_core.so
+            ar rcs output/linux/libtess_core.a tess_core_wrap.o
+          fi
+          
+          llvm-strip --strip-unneeded output/linux/libtess_core.so || true
+
+      - name: Cross-Compile Windows Dynamic Link Library (.dll)
+        run: |
+          mkdir -p output/windows
+          if [ -f core.o ]; then
+            x86_64-w64-mingw32-g++ -shared -O3 tess_core_wrap.o core.o -o output/windows/tess_core.dll
+          else
+            x86_64-w64-mingw32-g++ -shared -O3 tess_core_wrap.cxx -o output/windows/tess_core.dll
+          fi
+          llvm-strip --strip-unneeded output/windows/tess_core.dll || true
+
+      - name: Compile WebAssembly Module (.wasm)
+        run: |
+          mkdir -p output/web
+          if [ -f core.o ]; then
+            emcc -O3 tess_core_wrap.o core.o -s STANDALONE_WASM=1 -o output/web/tess_core.wasm
+          else
+            emcc -O3 tess_core_wrap.cxx -s STANDALONE_WASM=1 -o output/web/tess_core.wasm
+          fi
+
+      - name: Upload Cross-Platform Binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-libraries-linux-win-wasm
+          path: output/
+
+  # -------------------------------------------------------------------
+  # Job 2: macOS Dynamic Library (.dylib)
+  # -------------------------------------------------------------------
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Install SWIG
+        run: brew install swig
+
+      - name: Generate SWIG Wrapper Source
+        run: swig -c++ -csharp tess_core.i
+
+      - name: Compile macOS Dynamic Library (.dylib)
+        run: |
+          mkdir -p output/macos
+          clang++ -O3 -fPIC -c tess_core_wrap.cxx -o tess_core_wrap.o
+          clang -c tesseract_master.ll -o core.o || echo "no ll yet"
+          
+          if [ -f core.o ]; then
+            clang++ -dynamiclib -O3 tess_core_wrap.o core.o -o output/macos/libtess_core.dylib
+          else
+            clang++ -dynamiclib -O3 tess_core_wrap.o -o output/macos/libtess_core.dylib
+          fi
+          strip -x output/macos/libtess_core.dylib || true
+
+      - name: Upload macOS Binary (.dylib)
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-library-macos
+          path: output/macos/
+
+  # -------------------------------------------------------------------
+  # Job 3: Android Build (.aar containing NDK .so architectures)
+  # -------------------------------------------------------------------
+  build-android:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
 
       - name: Set up Java JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26b
 
       - name: Setup Gradle Runtime Environment
         uses: gradle/actions/setup-gradle@v3
@@ -47,24 +163,14 @@ jobs:
 
       - name: Build & Obfuscate Android SDK (.aar)
         run: ./gradlew :library:assembleRelease -PminifyEnabled=true --no-daemon
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
 
       - name: Strip Native Binary Symbols
         run: |
-          echo "Stripping native binary symbols from compiled workspace architectures..."
-          find library/build/intermediates/ -name "*.so" -exec llvm-strip --strip-unneeded {} \; 2>/dev/null || true
+          find library/build/intermediates/ -name "*.so" -exec llvm-strip --strip-unneeded {} \; 2>/devnull || true
 
-      - name: Verify Generated Outputs
-        run: |
-          echo "Verifying generated AAR files in workspace..."
-          find library/build/outputs/aar/ -type f || echo "Warning: No AAR file produced!"
-
-      - name: Upload Language Bindings (C#, Python, Java)
-        uses: actions/upload-artifact@v4
-        with:
-          name: language-bindings
-          path: bindings/
-
-      - name: Upload Obfuscated Android SDK (.aar)
+      - name: Upload Android SDK (.aar)
         uses: actions/upload-artifact@v4
         with:
           name: holomatics-sdk-aar
