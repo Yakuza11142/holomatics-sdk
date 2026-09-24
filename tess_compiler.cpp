@@ -601,7 +601,6 @@ public:
         header << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
     }
 
-    // Register all structs ahead of emission (Prevents cross-module struct resolution crashes)
     void register_struct(const StructDeclNode& st) {
         known_structs[st.name] = st;
     }
@@ -648,8 +647,7 @@ public:
                     scope_table.insert(var_decl->var_name, {ptr, var_decl->var_type});
                 } else if (auto ret = dynamic_cast<ReturnStmtNode*>(stmt.get())) {
                     auto [ret_reg, ret_type] = lower_expression(ret->expr.get());
-                    
-                    // Return Type Cast Guarantee
+
                     if (fn.return_type.is_float() && ret_type.is_int()) {
                         std::string conv = new_reg();
                         ir << "  " << conv << " = sitofp i64 " << ret_reg << " to double\n";
@@ -677,7 +675,7 @@ public:
 };
 
 // ============================================================================
-// 7. COMPILER MAIN DRIVER
+// 7. COMPILER MAIN DRIVER (Builds IR and invokes Clang for .so generation)
 // ============================================================================
 
 int main(int argc, char* argv[]) {
@@ -705,19 +703,17 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        std::cout << "[Tesseract Compiler]: Loaded " << count << " source files[span_1](start_span)[span_1](end_span)[span_2](start_span)[span_2](end_span)[span_3](start_span)[span_3](end_span)[span_4](start_span)[span_4](end_span)[span_5](start_span)[span_5](end_span)[span_6](start_span)[span_6](end_span).\n";
+        std::cout << "[Tesseract Compiler]: Loaded " << count << " source files.\n";
         std::cout << "[Tesseract Compiler]: Resolving module dependencies...\n";
         std::vector<std::string> order = solver.resolve();
 
         ProductionLLVMGenerator gen;
 
-        // PRE-PASS: Register all structs into global symbol table first
         for (const auto& mod : order) {
             const auto& m = solver.get(mod);
             for (const auto& st : m.structs) gen.register_struct(*st);
         }
 
-        // EMISSION PASS: Output LLVM IR and C-FFI header
         for (const auto& mod : order) {
             const auto& m = solver.get(mod);
             for (const auto& st : m.structs) gen.emit_struct(*st);
@@ -725,15 +721,15 @@ int main(int argc, char* argv[]) {
         }
 
         gen.finalize("tesseract_master.ll", "tess_core.h");
-        std::cout << "[Tesseract Compiler]: Successfully output 'tesseract_master.ll' and 'tess_core.h[span_7](start_span)'[span_7](end_span).\n";
+        std::cout << "[Tesseract Compiler]: Successfully output 'tesseract_master.ll' and 'tess_core.h'.\n";
 
-        std::cout << "[Tesseract Compiler]: Compiling shared library via Clang...\n";
+        std::cout << "[Tesseract Compiler]: Compiling dynamic shared library (libtesseract.so) via Clang...\n";
         int compile_res = std::system("clang -shared -fPIC tesseract_master.ll -o libtesseract.so");
 
         if (compile_res == 0) {
             std::cout << "[Tesseract Compiler]: BUILD SUCCESS -> libtesseract.so created!\n";
         } else {
-            std::cout << "[Tesseract Compiler]: Build notice: Raw LLVM IR generated (clang invocation skipped).\n";
+            std::cerr << "[Tesseract Compiler]: Build error -> Clang failed to compile libtesseract.so.\n";
         }
 
     } catch (const std::exception& e) {
