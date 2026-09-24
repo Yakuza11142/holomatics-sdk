@@ -1,4 +1,6 @@
 #include "tesseract_unified.h"
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -20,7 +22,7 @@ typedef struct {
 } TessArena;
 
 typedef struct {
-    uint64_t data[4]; // 256-bit binary descriptor (e.g. BRIEF/ORB)
+    uint64_t data[4]; // 256-bit binary descriptor (e.g., BRIEF/ORB)
 } TessDescriptor;
 
 // --- Thread-Safe Atomic Ring Buffer ---
@@ -189,6 +191,7 @@ int32_t tess_cv_push_camera_frame(TesseractContext* ctx, const TessCameraFrame* 
 
     ctx->feature_count = 0;
     int step = frame->width / 20;
+    if (step < 1) step = 1;
 
     for (int y = step; y < frame->height && ctx->feature_count < MAX_FEATURES; y += step) {
         for (int x = step; x < frame->width && ctx->feature_count < MAX_FEATURES; x += step) {
@@ -200,7 +203,7 @@ int32_t tess_cv_push_camera_frame(TesseractContext* ctx, const TessCameraFrame* 
                 kp->response = (float)pixel;
                 kp->id = ctx->feature_count;
 
-                // Simple descriptor generation pattern
+                // Descriptor generation pattern
                 TessDescriptor* desc = &ctx->feature_descriptors[ctx->feature_count];
                 desc->data[0] = ((uint64_t)pixel << 32) | (x ^ y);
                 desc->data[1] = ((uint64_t)x << 16) | y;
@@ -302,7 +305,7 @@ int32_t tess_spatial_raycast(
     TessVec3* out_hit_point
 ) {
     if (!ctx || !ray_origin || !ray_dir || !out_hit_node_id || !out_hit_point) return -1;
-    
+
     if (ctx->root_node->child_count > 0) {
         TessNode* target = ctx->root_node->children[0];
         *out_hit_node_id = target->id;
@@ -319,9 +322,9 @@ int32_t tess_queue_push_command(TesseractContext* ctx, const TessCommand* cmd) {
     if (!ctx || !cmd) return -1;
     TessRingBuffer* q = &ctx->cmd_queue;
 
-    uint32_t current_tail, next_tail;
+    uint32_t current_tail = atomic_load(&q->tail);
+    uint32_t next_tail;
     do {
-        current_tail = atomic_load(&q->tail);
         next_tail = (current_tail + 1) % RING_BUFFER_SIZE;
         if (next_tail == atomic_load(&q->head)) return -2; // Queue Full
     } while (!atomic_compare_exchange_weak(&q->tail, &current_tail, next_tail));
