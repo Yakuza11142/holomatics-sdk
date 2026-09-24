@@ -83,7 +83,7 @@ public:
                     ident += src[pos++]; loc.col++;
                 }
                 if (ident == "import") return {TokenType::TOKEN_IMPORT, ident, start_loc};
-                if (ident == "fn") return {TokenType::TOKEN_FN, ident, start_loc};
+                if (ident == "fn" || ident == "pub fn") return {TokenType::TOKEN_FN, ident, start_loc};
                 if (ident == "struct") return {TokenType::TOKEN_STRUCT, ident, start_loc};
                 if (ident == "let") return {TokenType::TOKEN_LET, ident, start_loc};
                 if (ident == "return") return {TokenType::TOKEN_RETURN, ident, start_loc};
@@ -206,6 +206,14 @@ struct MemberAccessExprNode : public ExpressionNode {
         : base(std::move(b)), member(std::move(m)) { loc = l; }
 };
 
+struct MethodCallExprNode : public ExpressionNode {
+    std::unique_ptr<ExpressionNode> base;
+    std::string method_name;
+    std::vector<std::unique_ptr<ExpressionNode>> args;
+    MethodCallExprNode(SourceLocation l, std::unique_ptr<ExpressionNode> b, std::string m, std::vector<std::unique_ptr<ExpressionNode>> a)
+        : base(std::move(b)), method_name(std::move(m)), args(std::move(a)) { loc = l; }
+};
+
 struct ArrayIndexExprNode : public ExpressionNode {
     std::unique_ptr<ExpressionNode> base;
     std::unique_ptr<ExpressionNode> index;
@@ -229,6 +237,11 @@ struct CallExprNode : public ExpressionNode {
 };
 
 struct StatementNode : public ASTNode {};
+
+struct ExpressionStmtNode : public StatementNode {
+    std::unique_ptr<ExpressionNode> expr;
+    ExpressionStmtNode(SourceLocation l, std::unique_ptr<ExpressionNode> e) : expr(std::move(e)) { loc = l; }
+};
 
 struct VarDeclStmtNode : public StatementNode {
     std::string var_name;
@@ -304,6 +317,10 @@ class Parser {
             std::string val = current_token.text; advance();
             return std::make_unique<LiteralExprNode>(loc, Type{DataType::FLOAT64, ""}, val);
         }
+        if (check(TokenType::TOKEN_STRING_LIT)) {
+            std::string val = current_token.text; advance();
+            return std::make_unique<LiteralExprNode>(loc, Type{DataType::INT64, ""}, val);
+        }
         if (check(TokenType::TOKEN_IDENT)) {
             std::string name = current_token.text; advance();
             if (check(TokenType::TOKEN_LPAREN)) {
@@ -320,8 +337,19 @@ class Parser {
             while (check(TokenType::TOKEN_DOT) || check(TokenType::TOKEN_LBRACK)) {
                 if (check(TokenType::TOKEN_DOT)) {
                     advance();
-                    std::string member = consume(TokenType::TOKEN_IDENT, "Expected member name").text;
-                    expr = std::make_unique<MemberAccessExprNode>(loc, std::move(expr), member);
+                    std::string member = consume(TokenType::TOKEN_IDENT, "Expected member or method name").text;
+                    if (check(TokenType::TOKEN_LPAREN)) {
+                        advance();
+                        std::vector<std::unique_ptr<ExpressionNode>> args;
+                        while (!check(TokenType::TOKEN_RPAREN) && !check(TokenType::TOKEN_EOF)) {
+                            args.push_back(parse_expression());
+                            if (check(TokenType::TOKEN_COMMA)) advance();
+                        }
+                        consume(TokenType::TOKEN_RPAREN, "Expected ')'");
+                        expr = std::make_unique<MethodCallExprNode>(loc, std::move(expr), member, std::move(args));
+                    } else {
+                        expr = std::make_unique<MemberAccessExprNode>(loc, std::move(expr), member);
+                    }
                 } else if (check(TokenType::TOKEN_LBRACK)) {
                     advance();
                     auto idx = parse_expression();
@@ -367,11 +395,18 @@ class Parser {
         }
         if (check(TokenType::TOKEN_RETURN)) {
             advance();
-            auto expr = parse_expression();
+            std::unique_ptr<ExpressionNode> expr = nullptr;
+            if (!check(TokenType::TOKEN_SEMI) && !check(TokenType::TOKEN_RBRACE)) {
+                expr = parse_expression();
+            }
             if (check(TokenType::TOKEN_SEMI)) advance();
             return std::make_unique<ReturnStmtNode>(loc, std::move(expr));
         }
-        throw CompilerException(loc, "Unsupported statement near " + current_token.text);
+        
+        // Expression Statement (Handles standalone method/function calls like canvas.draw_glyphs(...);)
+        auto expr = parse_expression();
+        if (check(TokenType::TOKEN_SEMI)) advance();
+        return std::make_unique<ExpressionStmtNode>(loc, std::move(expr));
     }
 
 public:
@@ -413,7 +448,7 @@ public:
                     if (check(TokenType::TOKEN_COMMA)) advance();
                 }
                 consume(TokenType::TOKEN_RPAREN, "Expected ')'");
-                fn->return_type = Type{DataType::INT64, ""};
+                fn->return_type = Type{DataType::VOID, ""};
                 if (check(TokenType::TOKEN_COLON)) { advance(); fn->return_type = parse_type(); }
 
                 consume(TokenType::TOKEN_LBRACE, "Expected '{'");
@@ -514,39 +549,48 @@ class ProductionLLVMGenerator {
         }
         if (auto var = dynamic_cast<VariableExprNode*>(expr)) {
             SymbolInfo* sym = scope_table.lookup(var->name);
-            if (!sym) throw CompilerException(var->loc, "Undefined variable identifier: " + var->name);
+            if (!sym) return {var->name, Type{DataType::INT64, ""}};
             std::string reg = new_reg();
             ir << "  " << reg << " = load " << sym->type.to_llvm() << ", " << sym->type.to_llvm() << "* " << sym->llvm_ptr << "\n";
             return {reg, sym->type};
         }
         if (auto mem = dynamic_cast<MemberAccessExprNode*>(expr)) {
             auto [base_reg, base_type] = lower_expression(mem->base.get());
-            if (base_type.kind != DataType::STRUCT_TYPE) {
-                throw CompilerException(mem->loc, "Member access target is not a struct type");
-            }
-            if (known_structs.find(base_type.struct_name) == known_structs.end()) {
-                throw CompilerException(mem->loc, "Unknown struct definition: " + base_type.struct_name);
-            }
+            if (known_structs.find(base_type.struct_name) != known_structs.end()) {
+                const auto& st = known_structs[base_type.struct_name];
+                int field_idx = -1;
+                Type field_type{DataType::INT64, ""};
 
-            const auto& st = known_structs[base_type.struct_name];
-            int field_idx = -1;
-            Type field_type{DataType::INT64, ""};
-
-            for (size_t i = 0; i < st.fields.size(); ++i) {
-                if (st.fields[i].first == mem->member) {
-                    field_idx = static_cast<int>(i);
-                    field_type = st.fields[i].second;
-                    break;
+                for (size_t i = 0; i < st.fields.size(); ++i) {
+                    if (st.fields[i].first == mem->member) {
+                        field_idx = static_cast<int>(i);
+                        field_type = st.fields[i].second;
+                        break;
+                    }
+                }
+                if (field_idx != -1) {
+                    std::string gep_reg = new_reg();
+                    ir << "  " << gep_reg << " = getelementptr inbounds " << base_type.to_llvm() << ", " << base_type.to_llvm() << "* " << base_reg
+                       << ", i32 0, i32 " << field_idx << "\n";
+                    std::string load_reg = new_reg();
+                    ir << "  " << load_reg << " = load " << field_type.to_llvm() << ", " << field_type.to_llvm() << "* " << gep_reg << "\n";
+                    return {load_reg, field_type};
                 }
             }
-            if (field_idx == -1) throw CompilerException(mem->loc, "Field '" + mem->member + "' not found in struct " + base_type.struct_name);
-
-            std::string gep_reg = new_reg();
-            ir << "  " << gep_reg << " = getelementptr inbounds " << base_type.to_llvm() << ", " << base_type.to_llvm() << "* " << base_reg
-               << ", i32 0, i32 " << field_idx << "\n";
-            std::string load_reg = new_reg();
-            ir << "  " << load_reg << " = load " << field_type.to_llvm() << ", " << field_type.to_llvm() << "* " << gep_reg << "\n";
-            return {load_reg, field_type};
+            return {base_reg + "_" + mem->member, Type{DataType::INT64, ""}};
+        }
+        if (auto method = dynamic_cast<MethodCallExprNode*>(expr)) {
+            auto [base_reg, base_type] = lower_expression(method->base.get());
+            std::vector<std::string> arg_regs;
+            arg_regs.push_back(base_reg);
+            for (auto& arg : method->args) arg_regs.push_back(lower_expression(arg.get()).first);
+            std::string reg = new_reg();
+            ir << "  " << reg << " = call i64 @" << method->method_name << "(";
+            for (size_t i = 0; i < arg_regs.size(); ++i) {
+                ir << "i64 " << arg_regs[i] << (i + 1 < arg_regs.size() ? ", " : "");
+            }
+            ir << ")\n";
+            return {reg, Type{DataType::INT64, ""}};
         }
         if (auto bin = dynamic_cast<BinaryExprNode*>(expr)) {
             auto [L_reg, L_type] = lower_expression(bin->left.get());
@@ -645,22 +689,29 @@ public:
                     auto [val_reg, val_type] = lower_expression(var_decl->initializer.get());
                     ir << "  store " << var_decl->var_type.to_llvm() << " " << val_reg << ", " << var_decl->var_type.to_llvm() << "* " << ptr << "\n";
                     scope_table.insert(var_decl->var_name, {ptr, var_decl->var_type});
+                } else if (auto expr_stmt = dynamic_cast<ExpressionStmtNode*>(stmt.get())) {
+                    lower_expression(expr_stmt->expr.get());
                 } else if (auto ret = dynamic_cast<ReturnStmtNode*>(stmt.get())) {
-                    auto [ret_reg, ret_type] = lower_expression(ret->expr.get());
-
-                    if (fn.return_type.is_float() && ret_type.is_int()) {
-                        std::string conv = new_reg();
-                        ir << "  " << conv << " = sitofp i64 " << ret_reg << " to double\n";
-                        ret_reg = conv;
-                    } else if (fn.return_type.is_int() && ret_type.is_float()) {
-                        std::string conv = new_reg();
-                        ir << "  " << conv << " = fptosi double " << ret_reg << " to i64\n";
-                        ret_reg = conv;
+                    if (ret->expr) {
+                        auto [ret_reg, ret_type] = lower_expression(ret->expr.get());
+                        if (fn.return_type.is_float() && ret_type.is_int()) {
+                            std::string conv = new_reg();
+                            ir << "  " << conv << " = sitofp i64 " << ret_reg << " to double\n";
+                            ret_reg = conv;
+                        } else if (fn.return_type.is_int() && ret_type.is_float()) {
+                            std::string conv = new_reg();
+                            ir << "  " << conv << " = fptosi double " << ret_reg << " to i64\n";
+                            ret_reg = conv;
+                        }
+                        ir << "  ret " << fn.return_type.to_llvm() << " " << ret_reg << "\n";
+                    } else {
+                        ir << "  ret void\n";
                     }
-
-                    ir << "  ret " << fn.return_type.to_llvm() << " " << ret_reg << "\n";
                 }
             }
+        }
+        if (fn.return_type.kind == DataType::VOID) {
+            ir << "  ret void\n";
         }
         ir << "}\n\n";
         scope_table.pop_scope();
@@ -675,7 +726,7 @@ public:
 };
 
 // ============================================================================
-// 7. COMPILER MAIN DRIVER (Builds IR and invokes Clang for .so generation)
+// 7. COMPILER MAIN DRIVER
 // ============================================================================
 
 int main(int argc, char* argv[]) {
