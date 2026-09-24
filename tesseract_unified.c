@@ -16,6 +16,13 @@ typedef struct __attribute__((aligned(16))) {
 } TessMatrix4x4Aligned;
 
 typedef struct {
+    float fx;
+    float fy;
+    float cx;
+    float cy;
+} TessCameraIntrinsics;
+
+typedef struct {
     uint8_t* buffer;
     size_t capacity;
     size_t offset;
