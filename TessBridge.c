@@ -8,12 +8,14 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 // Global JVM tracker for background sensor/render thread attaching
-static JavaVM* g_jvm = nullptr;
-static jobject g_engine_global_ref = nullptr;
+static JavaVM* g_jvm = NULL;
+static jobject g_engine_global_ref = NULL;
 static pthread_mutex_t g_render_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Protect names from C++ compiler mangling
+#ifdef __cplusplus
 extern "C" {
+#endif
 
 // Safe FFI Initialization hook executed during library load
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
@@ -24,13 +26,13 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 JNIEXPORT void JNICALL
 Java_com_tesseract_ui_TessEngine_nativeInit(JNIEnv* env, jobject thiz) {
     pthread_mutex_lock(&g_render_mutex);
-    
+
     // Protect the calling Java instance from garbage collection during async loops
-    if (g_engine_global_ref != nullptr) {
-        env->DeleteGlobalRef(g_engine_global_ref);
+    if (g_engine_global_ref != NULL) {
+        (*env)->DeleteGlobalRef(env, g_engine_global_ref);
     }
-    g_engine_global_ref = env->NewGlobalRef(thiz);
-    
+    g_engine_global_ref = (*env)->NewGlobalRef(env, thiz);
+
     LOGI("Tess Engine Core initialized successfully via JNI and pinned globally.");
     pthread_mutex_unlock(&g_render_mutex);
 }
@@ -54,12 +56,14 @@ Java_com_tesseract_ui_TessEngine_nativeRenderFrame(JNIEnv* env, jobject thiz) {
 JNIEXPORT void JNICALL
 Java_com_tesseract_ui_TessEngine_nativeShutdown(JNIEnv* env, jobject thiz) {
     pthread_mutex_lock(&g_render_mutex);
-    if (g_engine_global_ref != nullptr) {
-        env->DeleteGlobalRef(g_engine_global_ref);
-        g_engine_global_ref = nullptr;
+    if (g_engine_global_ref != NULL) {
+        (*env)->DeleteGlobalRef(env, g_engine_global_ref);
+        g_engine_global_ref = NULL;
     }
     LOGI("Tess Engine resources released cleanly from Android NDK runtime.");
     pthread_mutex_unlock(&g_render_mutex);
 }
 
+#ifdef __cplusplus
 } // extern "C"
+#endif
