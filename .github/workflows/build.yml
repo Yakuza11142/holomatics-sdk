@@ -21,7 +21,7 @@ jobs:
 
       - name: Compile Tesseract Compiler Executable
         run: |
-          g++ -std=c++20 -O3 tesseract_compiler.cpp -o tesseract_compiler
+          g++ -std=c++20 -O3 tess_compiler.cpp -o tesseract_compiler
 
       - name: Run Tesseract Compiler (Generate LLVM IR & Headers)
         run: |
