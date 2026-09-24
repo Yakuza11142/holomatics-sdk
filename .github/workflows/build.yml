@@ -27,18 +27,11 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Cache APT Packages
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-${{ hashFiles('.github/workflows/*.yml') }}
-          restore-keys: |
-            apt-${{ runner.os }}-
-
-      - name: Install Toolchains (SWIG, LLVM, MinGW)
+      - name: Install Toolchains (SWIG, LLVM, MinGW, Rust)
         run: |
           sudo apt-get update
           sudo apt-get install -y swig llvm clang g++ g++-mingw-w64-x86-64
+          rustup default stable
 
       - name: Setup Official Emscripten SDK (emsdk)
         uses: mymindstorm/setup-emsdk@v13
@@ -48,37 +41,79 @@ jobs:
       - name: Generate SWIG Wrapper Source
         run: |
           mkdir -p bindings
-          swig -c++ -csharp -outdir bindings/ tess_core.i
+          if [ -f "tess_core.i" ]; then
+            swig -c++ -csharp -outdir bindings/ tess_core.i
+          elif [ -f "tess.i" ]; then
+            swig -c++ -csharp -outdir bindings/ tess.i
+          fi
+
+      - name: Compile Core Rust C-ABI Libraries
+        run: |
+          mkdir -p build_rust
+          if [ -f "Cargo.toml" ]; then
+            cargo build --release
+            find target/release/ -maxdepth 2 -name "*.a" -exec cp {} build_rust/ \; 2>/devnull || true
+          elif [ -f "tesseract.rs" ]; then
+            rustc --crate-type staticlib -O tesseract.rs --out-dir build_rust/ || true
+          fi
 
       - name: Compile Core C/C++ Sources (Linux)
         run: |
-          mkdir -p output/linux
-          # Compile native core components
-          gcc -O3 -fPIC -c tesseract_core.c -o core.o
-          gcc -O3 -fPIC -c tesseract_unified.c -o unified.o || true
-          clang++ -O3 -fPIC -c tess_compiler.cpp -o compiler.o || true
-          clang++ -O3 -fPIC -c tess_core_wrap.cxx -o tess_core_wrap.o
+          mkdir -p output/linux build_linux
+          INCLUDES="-I. -Isrc"
 
-          # Link shared object (.so) and static library (.a)
-          clang++ -shared -O3 tess_core_wrap.o core.o *.o -o output/linux/libtess_core.so
-          ar rcs output/linux/libtess_core.a tess_core_wrap.o core.o
+          for f in tesseract_unified.c tesseract_core.c tesseract_concurrency.c tesseract_lighting.c tesseract_occlusion.c tesseract_ops.c tesseract_pro.c tesseract_queue.c TessBridge.c velo.c main.c; do
+            if [ -f "$f" ]; then
+              gcc -O3 -fPIC -std=c11 $INCLUDES -c "$f" -o "build_linux/${f%.c}.o"
+            fi
+          done
+
+          if [ -f "tess_compiler.cpp" ]; then
+            clang++ -O3 -fPIC -std=c++17 $INCLUDES -c tess_compiler.cpp -o build_linux/tess_compiler.o
+          fi
+          if [ -f "tess_core_wrap.cxx" ]; then
+            clang++ -O3 -fPIC -std=c++17 $INCLUDES -c tess_core_wrap.cxx -o build_linux/tess_core_wrap.o
+          fi
+
+          RUST_LIBS=$(ls build_rust/*.a 2>/devnull || true)
+          clang++ -shared -O3 build_linux/*.o $RUST_LIBS -o output/linux/libtess_core.so
+          ar rcs output/linux/libtess_core.a build_linux/*.o
           llvm-strip --strip-unneeded output/linux/libtess_core.so || true
 
       - name: Cross-Compile Windows Dynamic Link Library (.dll)
         run: |
-          mkdir -p output/windows
-          x86_64-w64-mingw32-gcc -O3 -c tesseract_core.c -o core_win.o
-          x86_64-w64-mingw32-gcc -O3 -c tesseract_unified.c -o unified_win.o || true
-          x86_64-w64-mingw32-g++ -O3 -c tess_compiler.cpp -o compiler_win.o || true
-          x86_64-w64-mingw32-g++ -O3 -c tess_core_wrap.cxx -o tess_core_wrap_win.o
+          mkdir -p output/windows build_win
+          INCLUDES="-I. -Isrc"
 
-          x86_64-w64-mingw32-g++ -shared -O3 tess_core_wrap_win.o core_win.o *_win.o -o output/windows/tess_core.dll
+          for f in tesseract_unified.c tesseract_core.c tesseract_concurrency.c tesseract_lighting.c tesseract_occlusion.c tesseract_ops.c tesseract_pro.c tesseract_queue.c TessBridge.c velo.c main.c; do
+            if [ -f "$f" ]; then
+              x86_64-w64-mingw32-gcc -O3 -std=c11 $INCLUDES -c "$f" -o "build_win/${f%.c}.o"
+            fi
+          done
+
+          if [ -f "tess_compiler.cpp" ]; then
+            x86_64-w64-mingw32-g++ -O3 -std=c++17 $INCLUDES -c tess_compiler.cpp -o build_win/tess_compiler.o
+          fi
+          if [ -f "tess_core_wrap.cxx" ]; then
+            x86_64-w64-mingw32-g++ -O3 -std=c++17 $INCLUDES -c tess_core_wrap.cxx -o build_win/tess_core_wrap.o
+          fi
+
+          x86_64-w64-mingw32-g++ -shared -O3 build_win/*.o -o output/windows/tess_core.dll
           llvm-strip --strip-unneeded output/windows/tess_core.dll || true
 
       - name: Compile WebAssembly Module (.wasm)
         run: |
           mkdir -p output/web
-          emcc -O3 tess_core_wrap.o core.o -s STANDALONE_WASM=1 -o output/web/tess_core.wasm
+          INCLUDES="-I. -Isrc"
+          
+          C_SOURCES=""
+          for f in tesseract_unified.c tesseract_core.c tesseract_concurrency.c tesseract_lighting.c tesseract_occlusion.c tesseract_ops.c tesseract_pro.c tesseract_queue.c TessBridge.c velo.c main.c; do
+            if [ -f "$f" ]; then C_SOURCES="$C_SOURCES $f"; fi
+          done
+
+          if [ -n "$C_SOURCES" ]; then
+            emcc -O3 -std=c11 $INCLUDES $C_SOURCES -s STANDALONE_WASM=1 -o output/web/tess_core.wasm
+          fi
 
       - name: Upload Cross-Platform Binaries
         uses: actions/upload-artifact@v4
@@ -100,17 +135,32 @@ jobs:
         run: brew install swig
 
       - name: Generate SWIG Wrapper Source
-        run: swig -c++ -csharp tess_core.i
+        run: |
+          if [ -f "tess_core.i" ]; then
+            swig -c++ -csharp tess_core.i
+          elif [ -f "tess.i" ]; then
+            swig -c++ -csharp tess.i
+          fi
 
       - name: Compile macOS Dynamic Library (.dylib)
         run: |
-          mkdir -p output/macos
-          clang -O3 -fPIC -c tesseract_core.c -o core.o
-          clang -O3 -fPIC -c tesseract_unified.c -o unified.o || true
-          clang++ -O3 -fPIC -c tess_compiler.cpp -o compiler.o || true
-          clang++ -O3 -fPIC -c tess_core_wrap.cxx -o tess_core_wrap.o
+          mkdir -p output/macos build_mac
+          INCLUDES="-I. -Isrc"
 
-          clang++ -dynamiclib -O3 tess_core_wrap.o core.o *.o -o output/macos/libtess_core.dylib
+          for f in tesseract_unified.c tesseract_core.c tesseract_concurrency.c tesseract_lighting.c tesseract_occlusion.c tesseract_ops.c tesseract_pro.c tesseract_queue.c TessBridge.c velo.c main.c; do
+            if [ -f "$f" ]; then
+              clang -O3 -fPIC -std=c11 -arch x86_64 -arch arm64 $INCLUDES -c "$f" -o "build_mac/${f%.c}.o"
+            fi
+          done
+
+          if [ -f "tess_compiler.cpp" ]; then
+            clang++ -O3 -fPIC -std=c++17 -arch x86_64 -arch arm64 $INCLUDES -c tess_compiler.cpp -o build_mac/tess_compiler.o
+          fi
+          if [ -f "tess_core_wrap.cxx" ]; then
+            clang++ -O3 -fPIC -std=c++17 -arch x86_64 -arch arm64 $INCLUDES -c tess_core_wrap.cxx -o build_mac/tess_core_wrap.o
+          fi
+
+          clang++ -dynamiclib -O3 -arch x86_64 -arch arm64 build_mac/*.o -o output/macos/libtess_core.dylib
           strip -x output/macos/libtess_core.dylib || true
 
       - name: Upload macOS Binary (.dylib)
@@ -145,6 +195,36 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.10'
+
+      - name: Cross-Compile Android Native Binaries (.so)
+        run: |
+          NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
+          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          INCLUDES="-I. -Isrc"
+
+          # Target arm64-v8a
+          mkdir -p library/src/main/jniLibs/arm64-v8a build_android_arm64
+          for f in tesseract_unified.c tesseract_core.c tesseract_concurrency.c tesseract_lighting.c tesseract_occlusion.c tesseract_ops.c tesseract_pro.c tesseract_queue.c TessBridge.c velo.c main.c; do
+            if [ -f "$f" ]; then
+              $TOOLCHAIN/aarch64-linux-android30-clang -O3 -fPIC -std=c11 $INCLUDES -c "$f" -o "build_android_arm64/${f%.c}.o"
+            fi
+          done
+          if [ -f "tess_compiler.cpp" ]; then
+            $TOOLCHAIN/aarch64-linux-android30-clang++ -O3 -fPIC -std=c++17 $INCLUDES -c tess_compiler.cpp -o build_android_arm64/tess_compiler.o
+          fi
+          $TOOLCHAIN/aarch64-linux-android30-clang++ -shared build_android_arm64/*.o -o library/src/main/jniLibs/arm64-v8a/libtess_core.so
+
+          # Target x86_64
+          mkdir -p library/src/main/jniLibs/x86_64 build_android_x86_64
+          for f in tesseract_unified.c tesseract_core.c tesseract_concurrency.c tesseract_lighting.c tesseract_occlusion.c tesseract_ops.c tesseract_pro.c tesseract_queue.c TessBridge.c velo.c main.c; do
+            if [ -f "$f" ]; then
+              $TOOLCHAIN/x86_64-linux-android30-clang -O3 -fPIC -std=c11 $INCLUDES -c "$f" -o "build_android_x86_64/${f%.c}.o"
+            fi
+          done
+          if [ -f "tess_compiler.cpp" ]; then
+            $TOOLCHAIN/x86_64-linux-android30-clang++ -O3 -fPIC -std=c++17 $INCLUDES -c tess_compiler.cpp -o build_android_x86_64/tess_compiler.o
+          fi
+          $TOOLCHAIN/x86_64-linux-android30-clang++ -shared build_android_x86_64/*.o -o library/src/main/jniLibs/x86_64/libtess_core.so
 
       - name: Generate Missing Wrapper Jar & Set Permissions
         run: |
