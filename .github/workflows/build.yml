@@ -50,44 +50,35 @@ jobs:
           mkdir -p bindings
           swig -c++ -csharp -outdir bindings/ tess_core.i
 
-      - name: Compile Linux Shared Object (.so) & Static Library (.a)
+      - name: Compile Core C/C++ Sources (Linux)
         run: |
           mkdir -p output/linux
-          clang++ -O3 -fPIC -c tesseract_compiler.cpp -o compiler.o || true
+          # Compile native core components
+          gcc -O3 -fPIC -c tesseract_core.c -o core.o
+          gcc -O3 -fPIC -c tesseract_unified.c -o unified.o || true
+          clang++ -O3 -fPIC -c tess_compiler.cpp -o compiler.o || true
           clang++ -O3 -fPIC -c tess_core_wrap.cxx -o tess_core_wrap.o
-          
-          # Compile LLVM IR bitcode/assembly if present
-          clang -c tesseract_master.ll -o core.o || echo "no ll yet"
-          
-          # Link core engine + SWIG glue layer
-          if [ -f core.o ]; then
-            clang++ -shared -O3 tess_core_wrap.o core.o -o output/linux/libtess_core.so
-            ar rcs output/linux/libtess_core.a tess_core_wrap.o core.o
-          else
-            clang++ -shared -O3 tess_core_wrap.o -o output/linux/libtess_core.so
-            ar rcs output/linux/libtess_core.a tess_core_wrap.o
-          fi
-          
+
+          # Link shared object (.so) and static library (.a)
+          clang++ -shared -O3 tess_core_wrap.o core.o *.o -o output/linux/libtess_core.so
+          ar rcs output/linux/libtess_core.a tess_core_wrap.o core.o
           llvm-strip --strip-unneeded output/linux/libtess_core.so || true
 
       - name: Cross-Compile Windows Dynamic Link Library (.dll)
         run: |
           mkdir -p output/windows
-          if [ -f core.o ]; then
-            x86_64-w64-mingw32-g++ -shared -O3 tess_core_wrap.o core.o -o output/windows/tess_core.dll
-          else
-            x86_64-w64-mingw32-g++ -shared -O3 tess_core_wrap.cxx -o output/windows/tess_core.dll
-          fi
+          x86_64-w64-mingw32-gcc -O3 -c tesseract_core.c -o core_win.o
+          x86_64-w64-mingw32-gcc -O3 -c tesseract_unified.c -o unified_win.o || true
+          x86_64-w64-mingw32-g++ -O3 -c tess_compiler.cpp -o compiler_win.o || true
+          x86_64-w64-mingw32-g++ -O3 -c tess_core_wrap.cxx -o tess_core_wrap_win.o
+
+          x86_64-w64-mingw32-g++ -shared -O3 tess_core_wrap_win.o core_win.o *_win.o -o output/windows/tess_core.dll
           llvm-strip --strip-unneeded output/windows/tess_core.dll || true
 
       - name: Compile WebAssembly Module (.wasm)
         run: |
           mkdir -p output/web
-          if [ -f core.o ]; then
-            emcc -O3 tess_core_wrap.o core.o -s STANDALONE_WASM=1 -o output/web/tess_core.wasm
-          else
-            emcc -O3 tess_core_wrap.cxx -s STANDALONE_WASM=1 -o output/web/tess_core.wasm
-          fi
+          emcc -O3 tess_core_wrap.o core.o -s STANDALONE_WASM=1 -o output/web/tess_core.wasm
 
       - name: Upload Cross-Platform Binaries
         uses: actions/upload-artifact@v4
@@ -114,14 +105,12 @@ jobs:
       - name: Compile macOS Dynamic Library (.dylib)
         run: |
           mkdir -p output/macos
+          clang -O3 -fPIC -c tesseract_core.c -o core.o
+          clang -O3 -fPIC -c tesseract_unified.c -o unified.o || true
+          clang++ -O3 -fPIC -c tess_compiler.cpp -o compiler.o || true
           clang++ -O3 -fPIC -c tess_core_wrap.cxx -o tess_core_wrap.o
-          clang -c tesseract_master.ll -o core.o || echo "no ll yet"
-          
-          if [ -f core.o ]; then
-            clang++ -dynamiclib -O3 tess_core_wrap.o core.o -o output/macos/libtess_core.dylib
-          else
-            clang++ -dynamiclib -O3 tess_core_wrap.o -o output/macos/libtess_core.dylib
-          fi
+
+          clang++ -dynamiclib -O3 tess_core_wrap.o core.o *.o -o output/macos/libtess_core.dylib
           strip -x output/macos/libtess_core.dylib || true
 
       - name: Upload macOS Binary (.dylib)
@@ -147,6 +136,7 @@ jobs:
           java-version: '17'
 
       - name: Setup Android NDK
+        id: setup-ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26b
@@ -164,7 +154,7 @@ jobs:
       - name: Build & Obfuscate Android SDK (.aar)
         run: ./gradlew :library:assembleRelease -PminifyEnabled=true --no-daemon
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
 
       - name: Strip Native Binary Symbols
         run: |
