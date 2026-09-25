@@ -23,24 +23,31 @@ jobs:
         run: |
           g++ -std=c++20 -O3 tess_compiler.cpp -o tesseract_compiler
 
-      - name: Run Tesseract Compiler (Generate LLVM IR & Headers)
+      - name: Run Tesseract Compiler (Process Source Directories)
         run: |
-          ./tesseract_compiler .
+          # Point the compiler to the folders containing your custom engine files
+          ./tesseract_compiler src/ app/ library/
 
-      - name: Build Shared Object Library (libtesseract.so)
+      - name: Build Shared Object Library (libTessSDK.so)
         run: |
-          clang -shared -fPIC tesseract_master.ll -o libtesseract.so
+          # Compiles the thread-safe JNI bridge with your LLVM intermediate representation core
+          clang++ -shared -fPIC -O3 -pthread \
+            -I./ \
+            TessBridge.c tesseract_master.ll \
+            -landroid -llog \
+            -o libTessSDK.so
 
       - name: Verify Exported Library Symbols
         run: |
-          file libtesseract.so
-          nm -D --defined-only libtesseract.so
+          file libTessSDK.so
+          echo "--- Exported Defined Symbols ---"
+          nm -D --defined-only libTessSDK.so
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: tesseract-engine-binaries
           path: |
-            libtesseract.so
+            libTessSDK.so
             tess_core.h
             tesseract_master.ll
