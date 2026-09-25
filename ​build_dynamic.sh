@@ -2,12 +2,13 @@
 # Enforce strict error handling parameters to drop the pipeline if a step crashes
 set -euo pipefail
 
-# Default fallback values if no arguments are passed
-SOURCE_FILE="${1:-tess_compiler.cpp}"
-TARGET_OUTPUT="${2:-libtess_compiler.so}"
+# Default fallback values updated to match TessEngine.java and TessBridge.c
+SOURCE_FILE="${1:-TessBridge.c}"
+TARGET_OUTPUT="${2:-libTessSDK.so}"
 
+# Default compiler fallback to clang++ with multi-threading support enabled
 CXX="${CXX:-clang++}"
-CXXFLAGS="${CXXFLAGS:--O3 -std=c++20}"
+CXXFLAGS="${CXXFLAGS:--O3 -std=c++20 -pthread}"
 
 echo "⚙️ Initializing Dynamic Hardened Build Pipeline..."
 echo "  📄 Source: ${SOURCE_FILE}"
@@ -31,17 +32,24 @@ fi
 
 echo "🔨 Executing native compilation step..."
 
-# Dynamic compilation with hardened memory protection fences
+# Dynamic compilation with hardened memory protection fences and explicit multi-threading
+# Note: Added linking flags for Android system logging libs (-llog -landroid)
 ${CXX} ${CXXFLAGS} "${EXTRA_FLAGS[@]}" \
     -fstack-protector-strong \
     -D_FORTIFY_SOURCE=2 \
     -Wformat -Werror=format-security \
     -Wall -Wextra \
-    "${SOURCE_FILE}" -o "${TARGET_OUTPUT}"
+    -I./ \
+    "${SOURCE_FILE}" -llog -landroid -o "${TARGET_OUTPUT}"
 
 # Output verification check
 if [ -f "./${TARGET_OUTPUT}" ]; then
     echo "✅ Native asset compiled successfully: ./${TARGET_OUTPUT}"
+    
+    # Print out structural details for verification debugging
+    if command -v file &> /dev/null; then
+        file "./${TARGET_OUTPUT}"
+    fi
 else
     echo "❌ Critical compilation failure: Target asset output missing."
     exit 1
