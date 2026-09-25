@@ -1,23 +1,24 @@
 cmake_minimum_required(VERSION 3.22.1)
-project("tessnative")
+project("TessSDK")
 
-# Keep optimization flags but ensure visibility is unblocked for JNI entry points
+# Optimization flags for Release builds
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -fdata-sections -ffunction-sections -flto")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -fdata-sections -ffunction-sections -flto")
-set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} -Wl,--gc-sections -Wl,-s")
+# NOTE: Removed '-fvisibility=hidden' and '-Wl,-s' to guarantee JNI exports stay visible
+set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} -Wl,--gc-sections")
 
-# Ensure CMake targets the file where it resides
+# Rename the target from 'tessnative' to 'TessSDK' so System.loadLibrary("TessSDK") succeeds
 add_library(
-    tessnative
+    TessSDK
     SHARED
-    tess_bridge.cpp 
+    TessBridge.c # Or tess_bridge.cpp depending on your primary bridge choice
 )
 
-# Tell the compiler where to look for tess_core.h
+# Tell the compiler where your header files (like tess_core.h) are located
 target_include_directories(
-    tessnative PRIVATE
+    TessSDK PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
 find_library(log-lib log)
-target_link_libraries(tessnative ${log-lib})
+target_link_libraries(TessSDK ${log-lib})
