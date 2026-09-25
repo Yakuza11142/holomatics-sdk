@@ -2,11 +2,12 @@ using System;
 using System.Runtime.InteropServices;
 
 /// <summary>
-/// Thread-safe, low-allocation C# P/Invoke wrapper for the native Tesseract spatial engine (<c>libtesseract.so</c> / <c>tesseract.dll</c> / <c>libtesseract.dylib</c>).
+/// Thread-safe, low-allocation C# P/Invoke wrapper for the native Tesseract spatial engine (<c>libTessSDK.so</c> / <c>TessSDK.dll</c> / <c>libTessSDK.dylib</c>).
 /// </summary>
 public sealed class TesseractEngine : IDisposable
 {
-    private const string LIB_NAME = "tesseract";
+    // FIX: Updated to match your unified dynamic library target binary artifact name
+    private const string LIB_NAME = "TessSDK";
 
     // ----------------------------------------------------------------------------
     // NATIVE STRUCTS & LAYOUTS (Zero-Allocation Inline Buffers)
