@@ -1,26 +1,23 @@
 cmake_minimum_required(VERSION 3.22.1)
-
 project("tessnative")
 
-# Set C/C++ Optimization and Obfuscation Flags
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -fvisibility=hidden -fvisibility-inlines-hidden -fdata-sections -ffunction-sections -flto")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -fvisibility=hidden -fdata-sections -ffunction-sections -flto")
+# Keep optimization flags but ensure visibility is unblocked for JNI entry points
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -fdata-sections -ffunction-sections -flto")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -fdata-sections -ffunction-sections -flto")
+set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} -Wl,--gc-sections -Wl,-s")
 
-# Linker flags to strip all symbol tables and discard unused sections
-set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} -Wl,--gc-sections -Wl,-s -Wl,--exclude-libs,ALL")
-
+# Ensure CMake targets the file where it resides
 add_library(
     tessnative
     SHARED
-    tess_bridge.cpp
+    tess_bridge.cpp 
 )
 
-find_library(
-    log-lib
-    log
+# Tell the compiler where to look for tess_core.h
+target_include_directories(
+    tessnative PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(
-    tessnative
-    ${log-lib}
-)
+find_library(log-lib log)
+target_link_libraries(tessnative ${log-lib})
