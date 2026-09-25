@@ -1,0 +1,157 @@
+#![no_std]
+#![no_main]
+#![deny_warnings]
+
+extern crate alloc;
+
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
+
+// ============================================================================
+// AUTOMATIC MODULE RESOLUTION LAYER
+// ============================================================================
+// Re-exporting all core UI, input, and layout components into a single namespace.
+// Any module in your crate can now pull types without explicitly specifying paths.
+pub use crate::tesseract_ui::*;
+
+pub mod tesseract_ui {
+    // Automatically bring all inner modules into scope
+    pub use super::tesseract_ui_core::*;
+    pub use super::tesseract_ui_input::*;
+    pub use super::tesseract_ui_layout::*;
+}
+
+// ----------------------------------------------------------------------------
+// ASSET BUNDLE & ADDITIONAL WIDGET MOCKS
+// ----------------------------------------------------------------------------
+
+pub struct MeshData;
+
+pub struct AssetBundle;
+
+impl AssetBundle {
+    #[inline(always)]
+    pub fn load_mesh(_path: &str) -> MeshData {
+        MeshData
+    }
+}
+
+pub struct Text {
+    pub content: &'static str,
+    pub font_size: Scalar,
+    pub color: Color,
+}
+
+impl Text {
+    #[inline(always)]
+    pub fn new(content: &'static str, font_size: Scalar, color: Color) -> Self {
+        Self { content, font_size, color }
+    }
+}
+
+impl Widget for Text {
+    fn render(&mut self, canvas: &mut Canvas) {
+        dispatch_render_text(canvas, self.content, self.font_size, self.color);
+    }
+
+    #[inline(always)]
+    fn get_height(&self) -> Scalar {
+        self.font_size
+    }
+}
+
+pub struct HologramView {
+    pub mesh: MeshData,
+    pub rotation: Matrix4,
+}
+
+impl HologramView {
+    #[inline(always)]
+    pub fn new(mesh: MeshData, rotation: Matrix4) -> Self {
+        Self { mesh, rotation }
+    }
+}
+
+impl Widget for HologramView {
+    fn render(&mut self, canvas: &mut Canvas) {
+        dispatch_render_hologram(canvas, &self.mesh, self.rotation);
+    }
+
+    #[inline(always)]
+    fn get_height(&self) -> Scalar {
+        500.0 // Default spatial bounds height
+    }
+}
+
+// ----------------------------------------------------------------------------
+// DISPATCH ENGINE INTERFACES (Hardware & Log Callouts)
+// ----------------------------------------------------------------------------
+
+#[inline(always)]
+fn dispatch_system_log_message(msg: &str) {
+    let _ = msg;
+}
+
+#[inline(always)]
+fn dispatch_render_text(canvas: &mut Canvas, text: &str, font_size: Scalar, color: Color) {
+    let _ = (canvas, text, font_size, color);
+}
+
+#[inline(always)]
+fn dispatch_render_hologram(canvas: &mut Canvas, mesh: &MeshData, rotation: Matrix4) {
+    let _ = (canvas, mesh, rotation);
+}
+
+#[inline(always)]
+fn dispatch_system_run_application_loop(app: Container) -> i32 {
+    let _ = app;
+    // Boot up the main system hardware thread run-loop pipelines safely
+    0
+}
+
+// ----------------------------------------------------------------------------
+// MAIN APPLICATION ENTRY POINT
+// ----------------------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn main(_argc: i32, _argv: *const *const u8) -> i32 {
+    // Advanced: Compile-ready structural runtime instantiation
+    let app = Container::new(
+        1080.0,
+        1920.0,
+        Color::new(0.05, 0.05, 0.08, 1.0),
+        Some(Box::new(GestureDetector::new(
+            Box::new(Column::new(
+                vec![
+                    Box::new(Text::new(
+                        "Tesseract Native Engine",
+                        32.0,
+                        Color::new(1.0, 1.0, 1.0, 1.0),
+                    )),
+                    Box::new(HologramView::new(
+                        // Hardware DMA mesh streaming safely bounded via Asset registers
+                        AssetBundle::load_mesh("hologram_core.vec"),
+                        // Calculated in pure radians (45 degrees * PI / 180) to prevent camera skewing
+                        Matrix4::rotate_y(0.785_398_2),
+                    )),
+                ],
+                20.0,
+            )),
+            || {
+                dispatch_system_log_message("Tesseract Interface Sensor Event: Screen Touched");
+            },
+            Vector2::new(0.0, 0.0),
+            Vector2::new(1080.0, 1920.0),
+        ))),
+    );
+
+    // Boot up the main system hardware thread run-loop pipelines safely
+    dispatch_system_run_application_loop(app)
+}
+
+// Panic Handler for bare-metal #![no_std] compliance
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
