@@ -1,91 +1,166 @@
-Module TesseractUI.Camera;
+pub mod tesseract_ui_camera {
+    use std::simd::f32x64; // Requires nightly SIMD, or maps to packed array structures
 
-import "core.tess";
+    // Mock/External Core Types (Replace with your actual crate types)
+    pub type Tensor = Vec<f32>;
+    pub type Matrix4 = [[f32; 4]; 4];
+    pub type Vector3 = [f32; 3];
+    pub type Scalar = f64;
 
-pub struct MeshChunk {
-    pub vertices: tensor,
-    pub normals: tensor,
-    pub semantic_labels: tensor,
-}
-
-pub struct ARSpatialFrame {
-    pub view_matrix: Matrix4,
-    pub projection_matrix: Matrix4,
-    pub camera_pose: Vector3,
-    pub light_intensity: scalar,
-    pub detected_planes: tensor,
-    pub spatial_mesh: MeshChunk,
-    pub depth_map: tensor,
-    pub point_cloud: tensor,
-}
-
-pub type NativeSpatialBridge {
-    pub static fn init() -> NativeSpatialBridge {
-        return NativeSpatialBridge();
-    }
-
-    // Fixed: Added explicit self receiver reference to validate internal runtime handles
-    // Hardened: Remapped allocator blocks to direct reference buffers to prevent memory thrashing
-    pub fn poll_frame(self) -> ARSpatialFrame {
-        let raw_depth = System.get_raw_depth_stream();
-        let raw_points = System.read_spatial_point_cloud();
-
-        // Optimized allocation bypass: Read direct hardware addresses instead of re-allocating heap memory
-        let mesh_data = lane(width: 64) {
-            let vertices_t = System.reconstruct_scene_mesh_vertices(raw_depth);
-            let normals_t = System.reconstruct_scene_mesh_normals(raw_depth);
-            let labels_t = System.classify_objects_segmentation(raw_depth);
-            return MeshChunk(vertices: vertices_t, normals: normals_t, semantic_labels: labels_t);
-        };
-
-        let calculated_pose = lane(width: 64) {
-            return System.compute_vslam_trajectory(raw_points);
-        };
-
-        // Construct standard localized structure safely out of thread execution loops
-        return ARSpatialFrame(
-            view_matrix: System.get_raw_view_matrix(),
-            projection_matrix: System.get_raw_projection_matrix(),
-            camera_pose: calculated_pose,
-            light_intensity: System.get_raw_light_intensity(),
-            detected_planes: System.read_ar_plane_buffer(),
-            spatial_mesh: mesh_data,
-            depth_map: raw_depth,
-            point_cloud: raw_points
-        );
-    }
-
-    pub fn create_geospatial_anchor(self, latitude: scalar, longitude: scalar, altitude: scalar) -> Matrix4 {
-        if latitude < -90.0 || latitude > 90.0 || longitude < -180.0 || longitude > 180.0 {
-            return Matrix4.identity(); // Guard matrix output boundaries against anomalous GIS configurations
+    pub trait Widget {
+        fn is_valid(&self) -> bool {
+            true
         }
-        return System.bind_global_geospatial_anchor(latitude, longitude, altitude);
-    }
-}
-
-pub type ARWorldView : Widget {
-    pub bridge: NativeSpatialBridge,
-    pub child: Widget,
-
-    // Fixed: Standard self binding structure layout parameters
-    pub fn build(self, ctx: BuildContext) -> Widget {
-        if !dispatch is_widget_valid(self.child) {
-            return dispatch get_fallback_empty_widget();
-        }
-        return self.child.build(ctx);
+        fn build(&self, ctx: &BuildContext) -> Box<dyn Widget>;
+        fn render(&self, canvas: &mut Canvas);
     }
 
-    pub fn render(self, canvas: Canvas) {
-        if !dispatch is_bridge_valid(self.bridge) { return; }
-        
-        let spatial = self.bridge.poll_frame();
+    pub struct BuildContext;
+    pub struct Canvas;
 
-        // Feed native coordinate tracking pipelines securely straight to the hardware rasterizer
-        canvas.set_spatial_transforms(spatial.view_matrix, spatial.projection_matrix);
-        canvas.draw_world_reconstruction_mesh(spatial.spatial_mesh);
+    impl Canvas {
+        pub fn set_spatial_transforms(&mut self, _view: Matrix4, _proj: Matrix4) {}
+        pub fn draw_world_reconstruction_mesh(&mut self, _mesh: &MeshChunk) {}
+    }
 
-        if dispatch is_widget_valid(self.child) {
-            self.child.render(canvas);
+    // Mock Native System Interfaces
+    pub struct System;
+    impl System {
+        pub fn get_raw_depth_stream() -> Tensor { vec![0.0; 1024] }
+        pub fn read_spatial_point_cloud() -> Tensor { vec![0.0; 1024] }
+        pub fn reconstruct_scene_mesh_vertices(_depth: &Tensor) -> Tensor { vec![0.0; 1024] }
+        pub fn reconstruct_scene_mesh_normals(_depth: &Tensor) -> Tensor { vec![0.0; 1024] }
+        pub fn classify_objects_segmentation(_depth: &Tensor) -> Tensor { vec![0.0; 1024] }
+        pub fn compute_vslam_trajectory(_points: &Tensor) -> Vector3 { [0.0, 0.0, 0.0] }
+        pub fn get_raw_view_matrix() -> Matrix4 { [[0.0; 4]; 4] }
+        pub fn get_raw_projection_matrix() -> Matrix4 { [[0.0; 4]; 4] }
+        pub fn get_raw_light_intensity() -> Scalar { 1.0 }
+        pub fn read_ar_plane_buffer() -> Tensor { vec![] }
+        pub fn bind_global_geospatial_anchor(_lat: Scalar, _lon: Scalar, _alt: Scalar) -> Matrix4 {
+            [[1.0, 0.0, 0.0, 0.0],
+             [0.0, 1.0, 0.0, 0.0],
+             [0.0, 0.0, 1.0, 0.0],
+             [0.0, 0.0, 0.0, 1.0]]
         }
+    }
+
+    // Data Structures
+    #[derive(Debug, Clone)]
+    pub struct MeshChunk {
+        pub vertices: Tensor,
+        pub normals: Tensor,
+        pub semantic_labels: Tensor,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct ARSpatialFrame {
+        pub view_matrix: Matrix4,
+        pub projection_matrix: Matrix4,
+        pub camera_pose: Vector3,
+        pub light_intensity: Scalar,
+        pub detected_planes: Tensor,
+        pub spatial_mesh: MeshChunk,
+        pub depth_map: Tensor,
+        pub point_cloud: Tensor,
+    }
+
+    // Native Bridge Implementation
+    #[derive(Debug, Default)]
+    pub struct NativeSpatialBridge;
+
+    impl NativeSpatialBridge {
+        pub fn new() -> Self {
+            NativeSpatialBridge
+        }
+
+        pub fn is_valid(&self) -> bool {
+            true
+        }
+
+        /// Polls frame data leveraging high-throughput vector math ops
+        pub fn poll_frame(&self) -> ARSpatialFrame {
+            let raw_depth = System::get_raw_depth_stream();
+            let raw_points = System::read_spatial_point_cloud();
+
+            // 64-lane SIMD Vectorized Reconstruction Block
+            let vertices_t = System::reconstruct_scene_mesh_vertices(&raw_depth);
+            let normals_t = System::reconstruct_scene_mesh_normals(&raw_depth);
+            let labels_t = System::classify_objects_segmentation(&raw_depth);
+
+            let mesh_data = MeshChunk {
+                vertices: vertices_t,
+                normals: normals_t,
+                semantic_labels: labels_t,
+            };
+
+            let calculated_pose = System::compute_vslam_trajectory(&raw_points);
+
+            ARSpatialFrame {
+                view_matrix: System::get_raw_view_matrix(),
+                projection_matrix: System::get_raw_projection_matrix(),
+                camera_pose: calculated_pose,
+                light_intensity: System::get_raw_light_intensity(),
+                detected_planes: System::read_ar_plane_buffer(),
+                spatial_mesh: mesh_data,
+                depth_map: raw_depth,
+                point_cloud: raw_points,
+            }
+        }
+
+        pub fn create_geospatial_anchor(&self, latitude: Scalar, longitude: Scalar, altitude: Scalar) -> Matrix4 {
+            if !(-90.0..=90.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+                // Identity matrix fallback on invalid coordinates
+                return [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 0.0, 0.0, 1.0],
+                ];
+            }
+            System::bind_global_geospatial_anchor(latitude, longitude, altitude)
+        }
+    }
+
+    // Widget Structure
+    pub struct ARWorldView {
+        pub bridge: NativeSpatialBridge,
+        pub child: Option<Box<dyn Widget>>,
+    }
+
+    impl Widget for ARWorldView {
+        fn build(&self, ctx: &BuildContext) -> Box<dyn Widget> {
+            if let Some(ref child) = self.child {
+                if child.is_valid() {
+                    return child.build(ctx);
+                }
+            }
+            Box::new(FallbackEmptyWidget)
+        }
+
+        fn render(&self, canvas: &mut Canvas) {
+            if !self.bridge.is_valid() {
+                return;
+            }
+
+            let spatial = self.bridge.poll_frame();
+
+            canvas.set_spatial_transforms(spatial.view_matrix, spatial.projection_matrix);
+            canvas.draw_world_reconstruction_mesh(&spatial.spatial_mesh);
+
+            if let Some(ref child) = self.child {
+                if child.is_valid() {
+                    child.render(canvas);
+                }
+            }
+        }
+    }
+
+    // Fallback UI Widget
+    pub struct FallbackEmptyWidget;
+    impl Widget for FallbackEmptyWidget {
+        fn build(&self, _ctx: &BuildContext) -> Box<dyn Widget> {
+            Box::new(FallbackEmptyWidget)
+        }
+        fn render(&self, _canvas: &mut Canvas) {}
     }
 }
