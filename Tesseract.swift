@@ -1,5 +1,6 @@
 import Foundation
 import os.lock
+import TessSDK // FIX: Explicitly import your unified native dynamic module mapping
 
 // Foreign C/Rust opaque handle marked Sendable for Swift 6 strict concurrency checks
 private struct TesseractContext: @unchecked Sendable {
