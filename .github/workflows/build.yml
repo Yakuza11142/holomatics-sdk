@@ -12,7 +12,7 @@ jobs:
 
     steps:
       - name: Checkout Codebase
-        uses: actions/checkout@v4
+        uses: annotations/checkout@v4
 
       - name: Install LLVM, Clang, and Toolchain Dependencies
         run: |
@@ -25,13 +25,24 @@ jobs:
 
       - name: Run Tesseract Compiler (Process Source Directories)
         run: |
-          # Point the compiler to the folders containing your custom engine files
           ./tesseract_compiler src/ app/ library/
 
-      - name: Build Shared Object Library (libTessSDK.so)
+      - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
         run: |
-          # Compiles the thread-safe JNI bridge with your LLVM intermediate representation core
-          clang++ -shared -fPIC -O3 -pthread \
+          # 1. Locate the pre-installed Android NDK on the runner image
+          NDK_PATH="${ANDROID_NDK_LATEST_HOME}"
+          if [ -z "$NDK_PATH" ]; then
+            NDK_PATH="${ANDROID_HOME}/ndk-bundle"
+          fi
+          
+          echo "🤖 Utilizing Android NDK located at: $NDK_PATH"
+          
+          # 2. Select the cross-compiler toolchain for ARM64 Android devices (API Level 21+)
+          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
+          CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
+          
+          # 3. Execute the hardened compilation with native NDK system files mapped inside scope
+          $CLANG_CC -shared -fPIC -O3 -pthread \
             -I./ \
             TessBridge.c tesseract_master.ll \
             -landroid -llog \
@@ -41,7 +52,8 @@ jobs:
         run: |
           file libTessSDK.so
           echo "--- Exported Defined Symbols ---"
-          nm -D --defined-only libTessSDK.so
+          # Using LLVM-NM tool to inspect cross-compiled binary structures accurately
+          llvm-nm -D --defined-only libTessSDK.so
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
