@@ -12,7 +12,7 @@ jobs:
 
     steps:
       - name: Checkout Codebase
-        uses: annotations/checkout@v4
+        uses: actions/checkout@v4 # FIX: Corrected from annotations/checkout@v4
 
       - name: Install LLVM, Clang, and Toolchain Dependencies
         run: |
@@ -37,7 +37,7 @@ jobs:
           
           echo "🤖 Utilizing Android NDK located at: $NDK_PATH"
           
-          # 2. Select the cross-compiler toolchain for ARM64 Android devices (API Level 21+)
+          # 2. Select the cross-compiler toolchain for ARM64 Android devices
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
           
@@ -52,7 +52,6 @@ jobs:
         run: |
           file libTessSDK.so
           echo "--- Exported Defined Symbols ---"
-          # Using LLVM-NM tool to inspect cross-compiled binary structures accurately
           llvm-nm -D --defined-only libTessSDK.so
 
       - name: Upload Build Artifacts
