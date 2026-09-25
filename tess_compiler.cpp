@@ -3,789 +3,921 @@
 #include <sstream>
 #include <string>
 #include <vector>
-#include <unordered_map>
-#include <unordered_set>
 #include <memory>
-#include <filesystem>
+#include <map>
+#include <set>
 #include <queue>
-#include <algorithm>
-#include <stdexcept>
+#include <filesystem>
 #include <cctype>
 #include <cstdlib>
 
 namespace fs = std::filesystem;
 
 // ============================================================================
-// 1. DIAGNOSTICS & SPAN TRACKER
+// 1. SOURCE LOCATIONS & TOKENS
 // ============================================================================
 
 struct SourceLocation {
-    std::string file_path;
-    size_t line;
-    size_t col;
-
-    std::string to_string() const {
-        return file_path + ":" + std::to_string(line) + ":" + std::to_string(col);
-    }
+    std::string filename;
+    size_t line = 1;
+    size_t col = 1;
 };
-
-class CompilerException : public std::runtime_error {
-public:
-    CompilerException(const SourceLocation& loc, const std::string& msg)
-        : std::runtime_error("[COMPILER ERROR] " + loc.to_string() + ": " + msg) {}
-};
-
-// ============================================================================
-// 2. LEXICAL ANALYZER (LEXER)
-// ============================================================================
 
 enum class TokenType {
-    TOKEN_IMPORT, TOKEN_FN, TOKEN_STRUCT, TOKEN_LET, TOKEN_RETURN, TOKEN_IF, TOKEN_ELSE,
-    TOKEN_IDENT, TOKEN_INT_LIT, TOKEN_FLOAT_LIT, TOKEN_STRING_LIT,
-    TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH, TOKEN_ASSIGN,
-    TOKEN_EQUAL, TOKEN_NOT_EQUAL, TOKEN_LESS, TOKEN_GREATER, TOKEN_DOT,
-    TOKEN_LPAREN, TOKEN_RPAREN, TOKEN_LBRACE, TOKEN_RBRACE, TOKEN_LBRACK, TOKEN_RBRACK,
-    TOKEN_SEMI, TOKEN_COMMA, TOKEN_COLON, TOKEN_EOF
+    TOKEN_IMPORT,
+    TOKEN_FN,
+    TOKEN_STRUCT,
+    TOKEN_LET,
+    TOKEN_RETURN,
+    TOKEN_IF,
+    TOKEN_ELSE,
+    TOKEN_WHILE,
+    TOKEN_IDENT,
+    TOKEN_INT_LIT,
+    TOKEN_FLOAT_LIT,
+    TOKEN_STRING_LIT,
+    TOKEN_TYPE,
+    TOKEN_LPAREN, TOKEN_RPAREN,
+    TOKEN_LBRACE, TOKEN_RBRACE,
+    TOKEN_LBRACKET, TOKEN_RBRACKET,
+    TOKEN_SEMICOLON, TOKEN_COLON, TOKEN_COMMA, TOKEN_DOT,
+    TOKEN_ASSIGN, TOKEN_PLUS, TOKEN_MINUS, TOKEN_STAR, TOKEN_SLASH,
+    TOKEN_EQ, TOKEN_NEQ, TOKEN_LT, TOKEN_GT,
+    TOKEN_EOF, TOKEN_ERROR
 };
 
 struct Token {
     TokenType type;
-    std::string text;
+    std::string value;
     SourceLocation loc;
+    bool is_public = false;
 };
 
+// ============================================================================
+// 2. LEXER
+// ============================================================================
+
 class Lexer {
+private:
     std::string src;
     SourceLocation loc;
     size_t pos = 0;
-public:
-    Lexer(std::string source, std::string path)
-        : src(std::move(source)), loc{std::move(path), 1, 1} {}
 
-    Token next_token() {
+    char peek() const {
+        if (pos >= src.size()) return '\0';
+        return src[pos];
+    }
+
+    char advance() {
+        if (pos >= src.size()) return '\0';
+        char c = src[pos++];
+        if (c == '\n') {
+            loc.line++;
+            loc.col = 1;
+        } else {
+            loc.col++;
+        }
+        return c;
+    }
+
+    void skip_whitespace_and_comments() {
         while (pos < src.size()) {
-            char current = src[pos];
-
-            if (current == '\n') { loc.line++; loc.col = 1; pos++; continue; }
-            if (std::isspace(static_cast<unsigned char>(current))) { loc.col++; pos++; continue; }
-
-            // Line Comments
-            if (current == '/' && pos + 1 < src.size() && src[pos + 1] == '/') {
-                while (pos < src.size() && src[pos] != '\n') pos++;
-                continue;
-            }
-
-            // Identifiers & Keywords
-            if (std::isalpha(static_cast<unsigned char>(current)) || current == '_') {
-                std::string ident;
-                SourceLocation start_loc = loc;
-                while (pos < src.size() && (std::isalnum(static_cast<unsigned char>(src[pos])) || src[pos] == '_')) {
-                    ident += src[pos++]; loc.col++;
-                }
-                if (ident == "import") return {TokenType::TOKEN_IMPORT, ident, start_loc};
-                if (ident == "fn" || ident == "pub fn") return {TokenType::TOKEN_FN, ident, start_loc};
-                if (ident == "struct") return {TokenType::TOKEN_STRUCT, ident, start_loc};
-                if (ident == "let") return {TokenType::TOKEN_LET, ident, start_loc};
-                if (ident == "return") return {TokenType::TOKEN_RETURN, ident, start_loc};
-                if (ident == "if") return {TokenType::TOKEN_IF, ident, start_loc};
-                if (ident == "else") return {TokenType::TOKEN_ELSE, ident, start_loc};
-                return {TokenType::TOKEN_IDENT, ident, start_loc};
-            }
-
-            // Numeric Literals
-            if (std::isdigit(static_cast<unsigned char>(current))) {
-                std::string num;
-                SourceLocation start_loc = loc;
-                bool is_float = false;
-                while (pos < src.size() && (std::isdigit(static_cast<unsigned char>(src[pos])) || src[pos] == '.')) {
-                    if (src[pos] == '.') is_float = true;
-                    num += src[pos++]; loc.col++;
-                }
-                return {is_float ? TokenType::TOKEN_FLOAT_LIT : TokenType::TOKEN_INT_LIT, num, start_loc};
-            }
-
-            // String Literals
-            if (current == '"') {
-                std::string str;
-                SourceLocation start_loc = loc;
-                pos++; loc.col++;
-                while (pos < src.size() && src[pos] != '"') {
-                    str += src[pos++]; loc.col++;
-                }
-                if (pos < src.size()) { pos++; loc.col++; }
-                return {TokenType::TOKEN_STRING_LIT, str, start_loc};
-            }
-
-            // Operators & Punctuation
-            SourceLocation start_loc = loc;
-            pos++; loc.col++;
-            switch (current) {
-                case '+': return {TokenType::TOKEN_PLUS, "+", start_loc};
-                case '-': return {TokenType::TOKEN_MINUS, "-", start_loc};
-                case '*': return {TokenType::TOKEN_STAR, "*", start_loc};
-                case '/': return {TokenType::TOKEN_SLASH, "/", start_loc};
-                case '.': return {TokenType::TOKEN_DOT, ".", start_loc};
-                case '=':
-                    if (pos < src.size() && src[pos] == '=') { pos++; loc.col++; return {TokenType::TOKEN_EQUAL, "==", start_loc}; }
-                    return {TokenType::TOKEN_ASSIGN, "=", start_loc};
-                case '<': return {TokenType::TOKEN_LESS, "<", start_loc};
-                case '>': return {TokenType::TOKEN_GREATER, ">", start_loc};
-                case '(': return {TokenType::TOKEN_LPAREN, "(", start_loc};
-                case ')': return {TokenType::TOKEN_RPAREN, ")", start_loc};
-                case '{': return {TokenType::TOKEN_LBRACE, "{", start_loc};
-                case '}': return {TokenType::TOKEN_RBRACE, "}", start_loc};
-                case '[': return {TokenType::TOKEN_LBRACK, "[", start_loc};
-                case ']': return {TokenType::TOKEN_RBRACK, "]", start_loc};
-                case ';': return {TokenType::TOKEN_SEMI, ";", start_loc};
-                case ':': return {TokenType::TOKEN_COLON, ":", start_loc};
-                case ',': return {TokenType::TOKEN_COMMA, ",", start_loc};
-                default: throw CompilerException(start_loc, std::string("Unexpected character: ") + current);
+            char c = peek();
+            if (std::isspace(static_cast<unsigned char>(c))) {
+                advance();
+            } else if (c == '/' && pos + 1 < src.size() && src[pos + 1] == '/') {
+                while (pos < src.size() && peek() != '\n') advance();
+            } else {
+                break;
             }
         }
-        return {TokenType::TOKEN_EOF, "", loc};
+    }
+
+public:
+    Lexer(std::string source, std::string filename) : src(std::move(source)) {
+        loc.filename = std::move(filename);
+    }
+
+    Token next_token() {
+        skip_whitespace_and_comments();
+        if (pos >= src.size()) {
+            return {TokenType::TOKEN_EOF, "", loc};
+        }
+
+        SourceLocation start_loc = loc;
+        char c = peek();
+
+        if (std::isalpha(static_cast<unsigned char>(c)) || c == '_') {
+            std::string ident;
+            while (pos < src.size() && (std::isalnum(static_cast<unsigned char>(peek())) || peek() == '_')) {
+                ident += advance();
+            }
+
+            // Public visibility token handling
+            if (ident == "pub") {
+                skip_whitespace_and_comments();
+                if (peek() == 'f' && pos + 1 < src.size() && src[pos + 1] == 'n') {
+                    advance(); advance(); // consume 'f', 'n'
+                    return {TokenType::TOKEN_FN, "pub fn", start_loc, true};
+                }
+                if (peek() == 's' && pos + 6 <= src.size() && src.substr(pos, 6) == "struct") {
+                    for (int i = 0; i < 6; ++i) advance();
+                    return {TokenType::TOKEN_STRUCT, "pub struct", start_loc, true};
+                }
+            }
+
+            if (ident == "import") return {TokenType::TOKEN_IMPORT, ident, start_loc};
+            if (ident == "fn") return {TokenType::TOKEN_FN, ident, start_loc};
+            if (ident == "struct") return {TokenType::TOKEN_STRUCT, ident, start_loc};
+            if (ident == "let") return {TokenType::TOKEN_LET, ident, start_loc};
+            if (ident == "return") return {TokenType::TOKEN_RETURN, ident, start_loc};
+            if (ident == "if") return {TokenType::TOKEN_IF, ident, start_loc};
+            if (ident == "else") return {TokenType::TOKEN_ELSE, ident, start_loc};
+            if (ident == "while") return {TokenType::TOKEN_WHILE, ident, start_loc};
+            if (ident == "i64" || ident == "f64" || ident == "void" || ident == "bool") {
+                return {TokenType::TOKEN_TYPE, ident, start_loc};
+            }
+
+            return {TokenType::TOKEN_IDENT, ident, start_loc};
+        }
+
+        if (std::isdigit(static_cast<unsigned char>(c))) {
+            std::string num;
+            bool is_float = false;
+            while (pos < src.size() && (std::isdigit(static_cast<unsigned char>(peek())) || peek() == '.')) {
+                if (peek() == '.') {
+                    if (is_float) break;
+                    is_float = true;
+                }
+                num += advance();
+            }
+            return {is_float ? TokenType::TOKEN_FLOAT_LIT : TokenType::TOKEN_INT_LIT, num, start_loc};
+        }
+
+        if (c == '"') {
+            advance(); // consume open quote
+            std::string str;
+            while (pos < src.size() && peek() != '"') {
+                if (peek() == '\\') advance(); // escape
+                str += advance();
+            }
+            if (peek() == '"') advance(); // consume close quote
+            return {TokenType::TOKEN_STRING_LIT, str, start_loc};
+        }
+
+        advance(); // Single character tokens
+        switch (c) {
+            case '(': return {TokenType::TOKEN_LPAREN, "(", start_loc};
+            case ')': return {TokenType::TOKEN_RPAREN, ")", start_loc};
+            case '{': return {TokenType::TOKEN_LBRACE, "{", start_loc};
+            case '}': return {TokenType::TOKEN_RBRACE, "}", start_loc};
+            case '[': return {TokenType::TOKEN_LBRACKET, "[", start_loc};
+            case ']': return {TokenType::TOKEN_RBRACKET, "]", start_loc};
+            case ';': return {TokenType::TOKEN_SEMICOLON, ";", start_loc};
+            case ':': return {TokenType::TOKEN_COLON, ":", start_loc};
+            case ',': return {TokenType::TOKEN_COMMA, ",", start_loc};
+            case '.': return {TokenType::TOKEN_DOT, ".", start_loc};
+            case '+': return {TokenType::TOKEN_PLUS, "+", start_loc};
+            case '-': return {TokenType::TOKEN_MINUS, "-", start_loc};
+            case '*': return {TokenType::TOKEN_STAR, "*", start_loc};
+            case '/': return {TokenType::TOKEN_SLASH, "/", start_loc};
+            case '=': 
+                if (peek() == '=') { advance(); return {TokenType::TOKEN_EQ, "==", start_loc}; }
+                return {TokenType::TOKEN_ASSIGN, "=", start_loc};
+            case '!':
+                if (peek() == '=') { advance(); return {TokenType::TOKEN_NEQ, "!=", start_loc}; }
+                break;
+            case '<': return {TokenType::TOKEN_LT, "<", start_loc};
+            case '>': return {TokenType::TOKEN_GT, ">", start_loc};
+        }
+
+        return {TokenType::TOKEN_ERROR, std::string(1, c), start_loc};
     }
 };
 
 // ============================================================================
-// 3. ABSTRACT SYNTAX TREE (AST)
+// 3. AST NODES
 // ============================================================================
 
-enum class DataType { INT64, FLOAT64, VOID, STRUCT_TYPE };
+enum class DataTypeKind { VOID, INT64, FLOAT64, BOOL, STRUCT };
 
-struct Type {
-    DataType kind = DataType::VOID;
-    std::string struct_name = "";
+struct TypeNode {
+    DataTypeKind kind = DataTypeKind::VOID;
+    std::string struct_name;
 
-    bool is_float() const { return kind == DataType::FLOAT64; }
-    bool is_int() const { return kind == DataType::INT64; }
-
-    std::string to_llvm() const {
+    std::string to_llvm_type() const {
         switch (kind) {
-            case DataType::INT64: return "i64";
-            case DataType::FLOAT64: return "double";
-            case DataType::VOID: return "void";
-            case DataType::STRUCT_TYPE: return "%struct." + struct_name;
+            case DataTypeKind::INT64: return "i64";
+            case DataTypeKind::FLOAT64: return "double";
+            case DataTypeKind::BOOL: return "i1";
+            case DataTypeKind::STRUCT: return "%struct." + struct_name;
+            default: return "void";
         }
-        return "i64";
-    }
-
-    std::string to_c() const {
-        switch (kind) {
-            case DataType::INT64: return "int64_t";
-            case DataType::FLOAT64: return "double";
-            case DataType::VOID: return "void";
-            case DataType::STRUCT_TYPE: return struct_name + "_t";
-        }
-        return "int64_t";
     }
 };
 
 struct ASTNode {
-    SourceLocation loc;
     virtual ~ASTNode() = default;
 };
 
-struct ExpressionNode : public ASTNode {
-    Type evaluated_type{DataType::INT64, ""};
-};
+struct ExpressionNode : public ASTNode {};
 
 struct LiteralExprNode : public ExpressionNode {
+    TypeNode type;
     std::string value;
-    LiteralExprNode(SourceLocation l, Type t, std::string v) { loc = l; evaluated_type = t; value = std::move(v); }
+    LiteralExprNode(TypeNode t, std::string v) : type(t), value(std::move(v)) {}
 };
 
-struct VariableExprNode : public ExpressionNode {
+struct IdentExprNode : public ExpressionNode {
     std::string name;
-    VariableExprNode(SourceLocation l, std::string n) { loc = l; name = std::move(n); }
-};
-
-struct MemberAccessExprNode : public ExpressionNode {
-    std::unique_ptr<ExpressionNode> base;
-    std::string member;
-    MemberAccessExprNode(SourceLocation l, std::unique_ptr<ExpressionNode> b, std::string m)
-        : base(std::move(b)), member(std::move(m)) { loc = l; }
-};
-
-struct MethodCallExprNode : public ExpressionNode {
-    std::unique_ptr<ExpressionNode> base;
-    std::string method_name;
-    std::vector<std::unique_ptr<ExpressionNode>> args;
-    MethodCallExprNode(SourceLocation l, std::unique_ptr<ExpressionNode> b, std::string m, std::vector<std::unique_ptr<ExpressionNode>> a)
-        : base(std::move(b)), method_name(std::move(m)), args(std::move(a)) { loc = l; }
-};
-
-struct ArrayIndexExprNode : public ExpressionNode {
-    std::unique_ptr<ExpressionNode> base;
-    std::unique_ptr<ExpressionNode> index;
-    ArrayIndexExprNode(SourceLocation l, std::unique_ptr<ExpressionNode> b, std::unique_ptr<ExpressionNode> i)
-        : base(std::move(b)), index(std::move(i)) { loc = l; }
+    explicit IdentExprNode(std::string n) : name(std::move(n)) {}
 };
 
 struct BinaryExprNode : public ExpressionNode {
     std::string op;
     std::unique_ptr<ExpressionNode> left;
     std::unique_ptr<ExpressionNode> right;
-    BinaryExprNode(SourceLocation l, std::string o, std::unique_ptr<ExpressionNode> L, std::unique_ptr<ExpressionNode> R)
-        : op(std::move(o)), left(std::move(L)), right(std::move(R)) { loc = l; }
+    BinaryExprNode(std::string o, std::unique_ptr<ExpressionNode> l, std::unique_ptr<ExpressionNode> r)
+        : op(std::move(o)), left(std::move(l)), right(std::move(r)) {}
+};
+
+struct MemberAccessExprNode : public ExpressionNode {
+    std::unique_ptr<ExpressionNode> object;
+    std::string member;
+    MemberAccessExprNode(std::unique_ptr<ExpressionNode> obj, std::string m)
+        : object(std::move(obj)), member(std::move(m)) {}
 };
 
 struct CallExprNode : public ExpressionNode {
     std::string callee;
     std::vector<std::unique_ptr<ExpressionNode>> args;
-    CallExprNode(SourceLocation l, std::string c, std::vector<std::unique_ptr<ExpressionNode>> a)
-        : callee(std::move(c)), args(std::move(a)) { loc = l; }
+    CallExprNode(std::string c, std::vector<std::unique_ptr<ExpressionNode>> a)
+        : callee(std::move(c)), args(std::move(a)) {}
 };
 
 struct StatementNode : public ASTNode {};
 
-struct ExpressionStmtNode : public StatementNode {
-    std::unique_ptr<ExpressionNode> expr;
-    ExpressionStmtNode(SourceLocation l, std::unique_ptr<ExpressionNode> e) : expr(std::move(e)) { loc = l; }
-};
-
 struct VarDeclStmtNode : public StatementNode {
-    std::string var_name;
-    Type var_type;
+    std::string name;
+    TypeNode type;
     std::unique_ptr<ExpressionNode> initializer;
-    VarDeclStmtNode(SourceLocation l, std::string n, Type t, std::unique_ptr<ExpressionNode> init)
-        : var_name(std::move(n)), var_type(t), initializer(std::move(init)) { loc = l; }
+    VarDeclStmtNode(std::string n, TypeNode t, std::unique_ptr<ExpressionNode> init)
+        : name(std::move(n)), type(t), initializer(std::move(init)) {}
 };
 
 struct ReturnStmtNode : public StatementNode {
     std::unique_ptr<ExpressionNode> expr;
-    ReturnStmtNode(SourceLocation l, std::unique_ptr<ExpressionNode> e) : expr(std::move(e)) { loc = l; }
+    explicit ReturnStmtNode(std::unique_ptr<ExpressionNode> e) : expr(std::move(e)) {}
+};
+
+struct ExpressionStmtNode : public StatementNode {
+    std::unique_ptr<ExpressionNode> expr;
+    explicit ExpressionStmtNode(std::unique_ptr<ExpressionNode> e) : expr(std::move(e)) {}
 };
 
 struct BlockStmtNode : public StatementNode {
     std::vector<std::unique_ptr<StatementNode>> statements;
 };
 
-struct FunctionDeclNode : public ASTNode {
+struct FieldDecl {
     std::string name;
-    std::vector<std::pair<std::string, Type>> params;
-    Type return_type;
-    std::unique_ptr<BlockStmtNode> body;
+    TypeNode type;
 };
 
 struct StructDeclNode : public ASTNode {
     std::string name;
-    std::vector<std::pair<std::string, Type>> fields;
+    bool is_pub = false;
+    std::vector<FieldDecl> fields;
 };
 
-struct ModuleAST {
-    std::string file_path;
-    std::string module_name;
+struct ParamDecl {
+    std::string name;
+    TypeNode type;
+};
+
+struct FunctionDeclNode : public ASTNode {
+    std::string name;
+    bool is_pub = false;
+    std::vector<ParamDecl> params;
+    TypeNode return_type;
+    std::unique_ptr<BlockStmtNode> body;
+};
+
+struct ModuleASTNode : public ASTNode {
+    std::string module_path;
     std::vector<std::string> imports;
     std::vector<std::unique_ptr<StructDeclNode>> structs;
     std::vector<std::unique_ptr<FunctionDeclNode>> functions;
 };
 
 // ============================================================================
-// 4. PARSER IMPLEMENTATION
+// 4. PARSER
 // ============================================================================
 
 class Parser {
+private:
     Lexer lexer;
     Token current_token;
 
-    void advance() { current_token = lexer.next_token(); }
-    bool check(TokenType type) const { return current_token.type == type; }
-
-    Token consume(TokenType type, const std::string& err) {
-        if (!check(type)) throw CompilerException(current_token.loc, err);
-        Token tok = current_token; advance(); return tok;
+    void advance() {
+        current_token = lexer.next_token();
     }
 
-    Type parse_type() {
-        if (check(TokenType::TOKEN_IDENT)) {
-            std::string t_name = current_token.text; advance();
-            if (t_name == "int64" || t_name == "int") return Type{DataType::INT64, ""};
-            if (t_name == "float" || t_name == "f64") return Type{DataType::FLOAT64, ""};
-            if (t_name == "void") return Type{DataType::VOID, ""};
-            return Type{DataType::STRUCT_TYPE, t_name};
+    bool check(TokenType type) const {
+        return current_token.type == type;
+    }
+
+    bool match(TokenType type) {
+        if (check(type)) {
+            advance();
+            return true;
         }
-        return Type{DataType::INT64, ""};
+        return false;
+    }
+
+    void expect(TokenType type, const std::string& err) {
+        if (!match(type)) {
+            std::cerr << "[" << current_token.loc.filename << ":" 
+                      << current_token.loc.line << ":" << current_token.loc.col 
+                      << "] Parse Error: " << err << " (Got '" << current_token.value << "')\n";
+            std::exit(EXIT_FAILURE);
+        }
+    }
+
+    TypeNode parse_type() {
+        TypeNode type;
+        if (current_token.value == "i64") type.kind = DataTypeKind::INT64;
+        else if (current_token.value == "f64") type.kind = DataTypeKind::FLOAT64;
+        else if (current_token.value == "bool") type.kind = DataTypeKind::BOOL;
+        else if (current_token.value == "void") type.kind = DataTypeKind::VOID;
+        else {
+            type.kind = DataTypeKind::STRUCT;
+            type.struct_name = current_token.value;
+        }
+        advance();
+        return type;
     }
 
     std::unique_ptr<ExpressionNode> parse_primary() {
-        SourceLocation loc = current_token.loc;
         if (check(TokenType::TOKEN_INT_LIT)) {
-            std::string val = current_token.text; advance();
-            return std::make_unique<LiteralExprNode>(loc, Type{DataType::INT64, ""}, val);
+            auto node = std::make_unique<LiteralExprNode>(TypeNode{DataTypeKind::INT64, ""}, current_token.value);
+            advance();
+            return node;
         }
         if (check(TokenType::TOKEN_FLOAT_LIT)) {
-            std::string val = current_token.text; advance();
-            return std::make_unique<LiteralExprNode>(loc, Type{DataType::FLOAT64, ""}, val);
-        }
-        if (check(TokenType::TOKEN_STRING_LIT)) {
-            std::string val = current_token.text; advance();
-            return std::make_unique<LiteralExprNode>(loc, Type{DataType::INT64, ""}, val);
+            auto node = std::make_unique<LiteralExprNode>(TypeNode{DataTypeKind::FLOAT64, ""}, current_token.value);
+            advance();
+            return node;
         }
         if (check(TokenType::TOKEN_IDENT)) {
-            std::string name = current_token.text; advance();
+            std::string name = current_token.value;
+            advance();
             if (check(TokenType::TOKEN_LPAREN)) {
                 advance();
                 std::vector<std::unique_ptr<ExpressionNode>> args;
-                while (!check(TokenType::TOKEN_RPAREN) && !check(TokenType::TOKEN_EOF)) {
-                    args.push_back(parse_expression());
-                    if (check(TokenType::TOKEN_COMMA)) advance();
+                if (!check(TokenType::TOKEN_RPAREN)) {
+                    do {
+                        args.push_back(parse_expression());
+                    } while (match(TokenType::TOKEN_COMMA));
                 }
-                consume(TokenType::TOKEN_RPAREN, "Expected ')'");
-                return std::make_unique<CallExprNode>(loc, name, std::move(args));
+                expect(TokenType::TOKEN_RPAREN, "Expected ')' after function arguments");
+                return std::make_unique<CallExprNode>(name, std::move(args));
             }
-            std::unique_ptr<ExpressionNode> expr = std::make_unique<VariableExprNode>(loc, name);
-            while (check(TokenType::TOKEN_DOT) || check(TokenType::TOKEN_LBRACK)) {
-                if (check(TokenType::TOKEN_DOT)) {
-                    advance();
-                    std::string member = consume(TokenType::TOKEN_IDENT, "Expected member or method name").text;
-                    if (check(TokenType::TOKEN_LPAREN)) {
-                        advance();
-                        std::vector<std::unique_ptr<ExpressionNode>> args;
-                        while (!check(TokenType::TOKEN_RPAREN) && !check(TokenType::TOKEN_EOF)) {
-                            args.push_back(parse_expression());
-                            if (check(TokenType::TOKEN_COMMA)) advance();
-                        }
-                        consume(TokenType::TOKEN_RPAREN, "Expected ')'");
-                        expr = std::make_unique<MethodCallExprNode>(loc, std::move(expr), member, std::move(args));
-                    } else {
-                        expr = std::make_unique<MemberAccessExprNode>(loc, std::move(expr), member);
-                    }
-                } else if (check(TokenType::TOKEN_LBRACK)) {
-                    advance();
-                    auto idx = parse_expression();
-                    consume(TokenType::TOKEN_RBRACK, "Expected ']'");
-                    expr = std::make_unique<ArrayIndexExprNode>(loc, std::move(expr), std::move(idx));
-                }
-            }
-            return expr;
+            return std::make_unique<IdentExprNode>(name);
         }
-        if (check(TokenType::TOKEN_LPAREN)) {
+        expect(TokenType::TOKEN_ERROR, "Unexpected primary expression");
+        return nullptr;
+    }
+
+    std::unique_ptr<ExpressionNode> parse_postfix() {
+        auto expr = parse_primary();
+        while (check(TokenType::TOKEN_DOT)) {
             advance();
-            auto expr = parse_expression();
-            consume(TokenType::TOKEN_RPAREN, "Expected ')'");
-            return expr;
+            std::string member = current_token.value;
+            expect(TokenType::TOKEN_IDENT, "Expected member identifier after '.'");
+            expr = std::make_unique<MemberAccessExprNode>(std::move(expr), member);
         }
-        throw CompilerException(loc, "Invalid expression syntax near " + current_token.text);
+        return expr;
     }
 
     std::unique_ptr<ExpressionNode> parse_expression() {
-        auto left = parse_primary();
-        while (check(TokenType::TOKEN_PLUS) || check(TokenType::TOKEN_MINUS) ||
-               check(TokenType::TOKEN_STAR) || check(TokenType::TOKEN_SLASH) ||
-               check(TokenType::TOKEN_EQUAL) || check(TokenType::TOKEN_LESS) || check(TokenType::TOKEN_GREATER)) {
-            SourceLocation loc = current_token.loc;
-            std::string op = current_token.text; advance();
-            auto right = parse_primary();
-            left = std::make_unique<BinaryExprNode>(loc, op, std::move(left), std::move(right));
+        auto left = parse_postfix();
+        if (check(TokenType::TOKEN_PLUS) || check(TokenType::TOKEN_MINUS) ||
+            check(TokenType::TOKEN_STAR) || check(TokenType::TOKEN_SLASH) ||
+            check(TokenType::TOKEN_EQ) || check(TokenType::TOKEN_LT) || check(TokenType::TOKEN_GT)) {
+            std::string op = current_token.value;
+            advance();
+            auto right = parse_expression();
+            return std::make_unique<BinaryExprNode>(op, std::move(left), std::move(right));
         }
         return left;
     }
 
     std::unique_ptr<StatementNode> parse_statement() {
-        SourceLocation loc = current_token.loc;
-        if (check(TokenType::TOKEN_LET)) {
-            advance();
-            std::string vname = consume(TokenType::TOKEN_IDENT, "Expected variable name").text;
-            Type vtype{DataType::INT64, ""};
-            if (check(TokenType::TOKEN_COLON)) { advance(); vtype = parse_type(); }
-            consume(TokenType::TOKEN_ASSIGN, "Expected '='");
-            auto init = parse_expression();
-            if (check(TokenType::TOKEN_SEMI)) advance();
-            return std::make_unique<VarDeclStmtNode>(loc, vname, vtype, std::move(init));
+        if (match(TokenType::TOKEN_LET)) {
+            std::string name = current_token.value;
+            expect(TokenType::TOKEN_IDENT, "Expected variable name");
+            expect(TokenType::TOKEN_COLON, "Expected ':' after variable name");
+            TypeNode type = parse_type();
+            std::unique_ptr<ExpressionNode> init = nullptr;
+            if (match(TokenType::TOKEN_ASSIGN)) {
+                init = parse_expression();
+            }
+            expect(TokenType::TOKEN_SEMICOLON, "Expected ';' after variable declaration");
+            return std::make_unique<VarDeclStmtNode>(name, type, std::move(init));
         }
-        if (check(TokenType::TOKEN_RETURN)) {
-            advance();
+        if (match(TokenType::TOKEN_RETURN)) {
             std::unique_ptr<ExpressionNode> expr = nullptr;
-            if (!check(TokenType::TOKEN_SEMI) && !check(TokenType::TOKEN_RBRACE)) {
+            if (!check(TokenType::TOKEN_SEMICOLON)) {
                 expr = parse_expression();
             }
-            if (check(TokenType::TOKEN_SEMI)) advance();
-            return std::make_unique<ReturnStmtNode>(loc, std::move(expr));
+            expect(TokenType::TOKEN_SEMICOLON, "Expected ';' after return");
+            return std::make_unique<ReturnStmtNode>(std::move(expr));
         }
-        
-        // Expression Statement (Handles standalone method/function calls like canvas.draw_glyphs(...);)
         auto expr = parse_expression();
-        if (check(TokenType::TOKEN_SEMI)) advance();
-        return std::make_unique<ExpressionStmtNode>(loc, std::move(expr));
+        expect(TokenType::TOKEN_SEMICOLON, "Expected ';' after expression statement");
+        return std::make_unique<ExpressionStmtNode>(std::move(expr));
+    }
+
+    std::unique_ptr<BlockStmtNode> parse_block() {
+        expect(TokenType::TOKEN_LBRACE, "Expected '{' to start block");
+        auto block = std::make_unique<BlockStmtNode>();
+        while (!check(TokenType::TOKEN_RBRACE) && !check(TokenType::TOKEN_EOF)) {
+            block->statements.push_back(parse_statement());
+        }
+        expect(TokenType::TOKEN_RBRACE, "Expected '}' to end block");
+        return block;
     }
 
 public:
-    Parser(Lexer l) : lexer(std::move(l)) { advance(); }
+    Parser(Lexer l) : lexer(std::move(l)) {
+        advance();
+    }
 
-    ModuleAST parse_module(const std::string& file_path, const std::string& mod_name) {
-        ModuleAST module; module.file_path = file_path; module.module_name = mod_name;
+    std::unique_ptr<ModuleASTNode> parse_module(const std::string& filepath) {
+        auto module_ast = std::make_unique<ModuleASTNode>();
+        module_ast->module_path = filepath;
 
         while (!check(TokenType::TOKEN_EOF)) {
-            if (check(TokenType::TOKEN_IMPORT)) {
-                advance();
-                std::string imp = consume(TokenType::TOKEN_STRING_LIT, "Expected import path").text;
-                if (check(TokenType::TOKEN_SEMI)) advance();
-                module.imports.push_back(imp);
+            if (match(TokenType::TOKEN_IMPORT)) {
+                std::string import_path = current_token.value;
+                expect(TokenType::TOKEN_STRING_LIT, "Expected string literal for import path");
+                expect(TokenType::TOKEN_SEMICOLON, "Expected ';' after import statement");
+                module_ast->imports.push_back(import_path);
             } else if (check(TokenType::TOKEN_STRUCT)) {
+                bool is_pub = current_token.is_public;
                 advance();
-                std::string sname = consume(TokenType::TOKEN_IDENT, "Expected struct name").text;
-                consume(TokenType::TOKEN_LBRACE, "Expected '{'");
-                auto st = std::make_unique<StructDeclNode>(); st->loc = current_token.loc; st->name = sname;
+                std::string struct_name = current_token.value;
+                expect(TokenType::TOKEN_IDENT, "Expected struct name");
+                expect(TokenType::TOKEN_LBRACE, "Expected '{' in struct declaration");
+                
+                auto struct_node = std::make_unique<StructDeclNode>();
+                struct_node->name = struct_name;
+                struct_node->is_pub = is_pub;
+
                 while (!check(TokenType::TOKEN_RBRACE) && !check(TokenType::TOKEN_EOF)) {
-                    std::string fname = consume(TokenType::TOKEN_IDENT, "Expected field name").text;
-                    consume(TokenType::TOKEN_COLON, "Expected ':'");
-                    Type ftype = parse_type();
-                    st->fields.push_back({fname, ftype});
-                    if (check(TokenType::TOKEN_COMMA)) advance();
+                    std::string fname = current_token.value;
+                    expect(TokenType::TOKEN_IDENT, "Expected field name");
+                    expect(TokenType::TOKEN_COLON, "Expected ':' after field name");
+                    TypeNode ftype = parse_type();
+                    expect(TokenType::TOKEN_SEMICOLON, "Expected ';' after field declaration");
+                    struct_node->fields.push_back({fname, ftype});
                 }
-                consume(TokenType::TOKEN_RBRACE, "Expected '}'");
-                module.structs.push_back(std::move(st));
+                expect(TokenType::TOKEN_RBRACE, "Expected '}' ending struct declaration");
+                module_ast->structs.push_back(std::move(struct_node));
             } else if (check(TokenType::TOKEN_FN)) {
+                bool is_pub = current_token.is_public;
                 advance();
-                std::string fname = consume(TokenType::TOKEN_IDENT, "Expected function name").text;
-                consume(TokenType::TOKEN_LPAREN, "Expected '('");
-                auto fn = std::make_unique<FunctionDeclNode>(); fn->loc = current_token.loc; fn->name = fname;
-                while (!check(TokenType::TOKEN_RPAREN) && !check(TokenType::TOKEN_EOF)) {
-                    std::string pname = consume(TokenType::TOKEN_IDENT, "Expected param name").text;
-                    consume(TokenType::TOKEN_COLON, "Expected ':'");
-                    Type ptype = parse_type();
-                    fn->params.push_back({pname, ptype});
-                    if (check(TokenType::TOKEN_COMMA)) advance();
-                }
-                consume(TokenType::TOKEN_RPAREN, "Expected ')'");
-                fn->return_type = Type{DataType::VOID, ""};
-                if (check(TokenType::TOKEN_COLON)) { advance(); fn->return_type = parse_type(); }
+                std::string fn_name = current_token.value;
+                expect(TokenType::TOKEN_IDENT, "Expected function name");
+                expect(TokenType::TOKEN_LPAREN, "Expected '(' after function name");
 
-                consume(TokenType::TOKEN_LBRACE, "Expected '{'");
-                fn->body = std::make_unique<BlockStmtNode>();
-                while (!check(TokenType::TOKEN_RBRACE) && !check(TokenType::TOKEN_EOF)) {
-                    fn->body->statements.push_back(parse_statement());
+                auto fn_node = std::make_unique<FunctionDeclNode>();
+                fn_node->name = fn_name;
+                fn_node->is_pub = is_pub;
+
+                if (!check(TokenType::TOKEN_RPAREN)) {
+                    do {
+                        std::string pname = current_token.value;
+                        expect(TokenType::TOKEN_IDENT, "Expected parameter name");
+                        expect(TokenType::TOKEN_COLON, "Expected ':' after parameter name");
+                        TypeNode ptype = parse_type();
+                        fn_node->params.push_back({pname, ptype});
+                    } while (match(TokenType::TOKEN_COMMA));
                 }
-                consume(TokenType::TOKEN_RBRACE, "Expected '}'");
-                module.functions.push_back(std::move(fn));
+                expect(TokenType::TOKEN_RPAREN, "Expected ')' after parameter list");
+
+                if (match(TokenType::TOKEN_COLON)) {
+                    fn_node->return_type = parse_type();
+                } else {
+                    fn_node->return_type = TypeNode{DataTypeKind::VOID, ""};
+                }
+
+                fn_node->body = parse_block();
+                module_ast->functions.push_back(std::move(fn_node));
             } else {
-                advance();
+                advance(); // Recovery skip
             }
         }
-        return module;
+        return module_ast;
     }
 };
 
 // ============================================================================
-// 5. DEPENDENCY GRAPH SOLVER
+// 5. DEPENDENCY RESOLVER (DAG & Topological Sort)
 // ============================================================================
 
-class DependencySolver {
-    std::unordered_map<std::string, ModuleAST> modules;
-    std::unordered_map<std::string, std::vector<std::string>> adj;
-    std::unordered_map<std::string, int> in_degree;
+class DependencyResolver {
 public:
-    void add_module(ModuleAST mod) {
-        std::string name = mod.module_name;
-        modules[name] = std::move(mod);
-        if (in_degree.find(name) == in_degree.end()) in_degree[name] = 0;
-        for (const auto& imp : modules[name].imports) {
-            adj[imp].push_back(name);
-            in_degree[name]++;
-        }
-    }
+    static std::vector<std::string> resolve_compilation_order(const std::string& root_file) {
+        std::map<std::string, std::vector<std::string>> adj;
+        std::map<std::string, int> in_degree;
+        std::set<std::string> visited;
 
-    std::vector<std::string> resolve() {
+        std::queue<std::string> worklist;
+        worklist.push(fs::canonical(root_file).string());
+
+        while (!worklist.empty()) {
+            std::string curr = worklist.front();
+            worklist.pop();
+
+            if (visited.count(curr)) continue;
+            visited.insert(curr);
+            if (!in_degree.count(curr)) in_degree[curr] = 0;
+
+            std::ifstream file(curr);
+            if (!file.is_open()) {
+                std::cerr << "Dependency Error: Could not open file " << curr << "\n";
+                std::exit(EXIT_FAILURE);
+            }
+
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            Lexer lexer(buffer.str(), curr);
+            Parser parser(lexer);
+            auto ast = parser.parse_module(curr);
+
+            for (const auto& imp : ast->imports) {
+                fs::path parent = fs::path(curr).parent_path();
+                std::string resolved_imp = fs::canonical(parent / imp).string();
+
+                adj[resolved_imp].push_back(curr);
+                in_degree[curr]++;
+
+                if (!visited.count(resolved_imp)) {
+                    worklist.push(resolved_imp);
+                }
+            }
+        }
+
         std::queue<std::string> q;
-        for (const auto& [mod, deg] : in_degree) if (deg == 0) q.push(mod);
-        std::vector<std::string> order;
+        for (const auto& [node, deg] : in_degree) {
+            if (deg == 0) q.push(node);
+        }
+
+        std::vector<std::string> ordered;
         while (!q.empty()) {
-            std::string curr = q.front(); q.pop();
-            order.push_back(curr);
-            for (const auto& next : adj[curr]) {
-                in_degree[next]--;
-                if (in_degree[next] == 0) q.push(next);
+            std::string u = q.front();
+            q.pop();
+            ordered.push_back(u);
+
+            for (const auto& v : adj[u]) {
+                if (--in_degree[v] == 0) {
+                    q.push(v);
+                }
             }
         }
-        if (order.size() != modules.size()) {
-            throw std::runtime_error("Circular module dependency detected!");
+
+        if (ordered.size() != visited.size()) {
+            std::cerr << "Dependency Error: Cyclic imports detected in compilation target!\n";
+            std::exit(EXIT_FAILURE);
         }
-        return order;
+
+        return ordered;
     }
-
-    const ModuleAST& get(const std::string& name) const { return modules.at(name); }
 };
 
 // ============================================================================
-// 6. SCOPED SYMBOL TABLE & PERFECT LLVM GENERATOR
+// 6. PRODUCTION LLVM IR CODE GENERATOR
 // ============================================================================
 
-struct SymbolInfo {
-    std::string llvm_ptr;
-    Type type;
-};
-
-class ScopeTable {
-    std::vector<std::unordered_map<std::string, SymbolInfo>> scopes;
+class SymbolScope {
 public:
-    void push_scope() { scopes.emplace_back(); }
-    void pop_scope() { if (!scopes.empty()) scopes.pop_back(); }
-
-    void insert(const std::string& name, const SymbolInfo& info) {
-        if (scopes.empty()) push_scope();
-        scopes.back()[name] = info;
-    }
-
-    SymbolInfo* lookup(const std::string& name) {
-        for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
-            if (it->find(name) != it->end()) return &((*it)[name]);
-        }
-        return nullptr;
-    }
+    std::map<std::string, std::string> var_allocas; // name -> llvm register (%1)
+    std::map<std::string, TypeNode> var_types;
 };
 
 class ProductionLLVMGenerator {
+private:
+    size_t reg_counter = 1;
     std::stringstream ir;
-    std::stringstream header;
-    size_t reg_counter = 0;
-    ScopeTable scope_table;
-    std::unordered_map<std::string, StructDeclNode> known_structs;
+    std::vector<SymbolScope> scope_table;
+    std::map<std::string, StructDeclNode*> struct_table;
 
-    std::string new_reg() { return "%r" + std::to_string(reg_counter++); }
+    std::string new_reg() {
+        return "%" + std::to_string(reg_counter++);
+    }
 
-    std::pair<std::string, Type> lower_expression(ExpressionNode* expr) {
+    void push_scope() {
+        scope_table.emplace_back();
+    }
+
+    void pop_scope() {
+        scope_table.pop_back();
+    }
+
+    void register_variable(const std::string& name, const std::string& reg, TypeNode type) {
+        scope_table.back().var_allocas[name] = reg;
+        scope_table.back().var_types[name] = type;
+    }
+
+    std::pair<std::string, TypeNode> lookup_variable(const std::string& name) {
+        for (auto it = scope_table.rbegin(); it != scope_table.rend(); ++it) {
+            if (it->var_allocas.count(name)) {
+                return {it->var_allocas[name], it->var_types[name]};
+            }
+        }
+        return {"", {DataTypeKind::VOID, ""}};
+    }
+
+    std::string lower_expression(ExpressionNode* expr, TypeNode& out_type) {
         if (auto lit = dynamic_cast<LiteralExprNode*>(expr)) {
-            return {lit->value, lit->evaluated_type};
+            out_type = lit->type;
+            return lit->value;
         }
-        if (auto var = dynamic_cast<VariableExprNode*>(expr)) {
-            SymbolInfo* sym = scope_table.lookup(var->name);
-            if (!sym) return {var->name, Type{DataType::INT64, ""}};
-            std::string reg = new_reg();
-            ir << "  " << reg << " = load " << sym->type.to_llvm() << ", " << sym->type.to_llvm() << "* " << sym->llvm_ptr << "\n";
-            return {reg, sym->type};
-        }
-        if (auto mem = dynamic_cast<MemberAccessExprNode*>(expr)) {
-            auto [base_reg, base_type] = lower_expression(mem->base.get());
-            if (known_structs.find(base_type.struct_name) != known_structs.end()) {
-                const auto& st = known_structs[base_type.struct_name];
-                int field_idx = -1;
-                Type field_type{DataType::INT64, ""};
 
-                for (size_t i = 0; i < st.fields.size(); ++i) {
-                    if (st.fields[i].first == mem->member) {
-                        field_idx = static_cast<int>(i);
-                        field_type = st.fields[i].second;
-                        break;
-                    }
-                }
-                if (field_idx != -1) {
-                    std::string gep_reg = new_reg();
-                    ir << "  " << gep_reg << " = getelementptr inbounds " << base_type.to_llvm() << ", " << base_type.to_llvm() << "* " << base_reg
-                       << ", i32 0, i32 " << field_idx << "\n";
-                    std::string load_reg = new_reg();
-                    ir << "  " << load_reg << " = load " << field_type.to_llvm() << ", " << field_type.to_llvm() << "* " << gep_reg << "\n";
-                    return {load_reg, field_type};
-                }
-            }
-            return {base_reg + "_" + mem->member, Type{DataType::INT64, ""}};
+        if (auto ident = dynamic_cast<IdentExprNode*>(expr)) {
+            auto [reg, type] = lookup_variable(ident->name);
+            out_type = type;
+            std::string load_reg = new_reg();
+            ir << "  " << load_reg << " = load " << type.to_llvm_type() << ", " 
+               << type.to_llvm_type() << "* " << reg << "\n";
+            return load_reg;
         }
-        if (auto method = dynamic_cast<MethodCallExprNode*>(expr)) {
-            auto [base_reg, base_type] = lower_expression(method->base.get());
-            std::vector<std::string> arg_regs;
-            arg_regs.push_back(base_reg);
-            for (auto& arg : method->args) arg_regs.push_back(lower_expression(arg.get()).first);
-            std::string reg = new_reg();
-            ir << "  " << reg << " = call i64 @" << method->method_name << "(";
-            for (size_t i = 0; i < arg_regs.size(); ++i) {
-                ir << "i64 " << arg_regs[i] << (i + 1 < arg_regs.size() ? ", " : "");
-            }
-            ir << ")\n";
-            return {reg, Type{DataType::INT64, ""}};
-        }
+
         if (auto bin = dynamic_cast<BinaryExprNode*>(expr)) {
-            auto [L_reg, L_type] = lower_expression(bin->left.get());
-            auto [R_reg, R_type] = lower_expression(bin->right.get());
+            TypeNode lt, rt;
+            std::string lreg = lower_expression(bin->left.get(), lt);
+            std::string rreg = lower_expression(bin->right.get(), rt);
+            out_type = lt;
 
-            Type target_type = L_type;
-            if (L_type.is_float() || R_type.is_float()) {
-                target_type = Type{DataType::FLOAT64, ""};
-                if (L_type.is_int()) {
-                    std::string conv = new_reg();
-                    ir << "  " << conv << " = sitofp i64 " << L_reg << " to double\n";
-                    L_reg = conv;
-                }
-                if (R_type.is_int()) {
-                    std::string conv = new_reg();
-                    ir << "  " << conv << " = sitofp i64 " << R_reg << " to double\n";
-                    R_reg = conv;
+            std::string res_reg = new_reg();
+            if (bin->op == "+") {
+                ir << "  " << res_reg << " = add " << lt.to_llvm_type() << " " << lreg << ", " << rreg << "\n";
+            } else if (bin->op == "-") {
+                ir << "  " << res_reg << " = sub " << lt.to_llvm_type() << " " << lreg << ", " << rreg << "\n";
+            } else if (bin->op == "*") {
+                ir << "  " << res_reg << " = mul " << lt.to_llvm_type() << " " << lreg << ", " << rreg << "\n";
+            } else if (bin->op == "/") {
+                ir << "  " << res_reg << " = sdiv " << lt.to_llvm_type() << " " << lreg << ", " << rreg << "\n";
+            }
+            return res_reg;
+        }
+
+        if (auto member = dynamic_cast<MemberAccessExprNode*>(expr)) {
+            TypeNode obj_type;
+            std::string obj_ref;
+
+            if (auto ident = dynamic_cast<IdentExprNode*>(member->object.get())) {
+                auto [reg, type] = lookup_variable(ident->name);
+                obj_ref = reg;
+                obj_type = type;
+            } else {
+                obj_ref = lower_expression(member->object.get(), obj_type);
+            }
+
+            StructDeclNode* st = struct_table[obj_type.struct_name];
+            int field_idx = -1;
+            TypeNode field_type;
+            for (size_t i = 0; i < st->fields.size(); ++i) {
+                if (st->fields[i].name == member->member) {
+                    field_idx = static_cast<int>(i);
+                    field_type = st->fields[i].type;
+                    break;
                 }
             }
 
-            std::string reg = new_reg();
-            std::string llvm_op = target_type.is_float() ? "fadd" : "add";
-            if (bin->op == "-") llvm_op = target_type.is_float() ? "fsub" : "sub";
-            if (bin->op == "*") llvm_op = target_type.is_float() ? "fmul" : "mul";
-            if (bin->op == "/") llvm_op = target_type.is_float() ? "fdiv" : "sdiv";
+            std::string gep_reg = new_reg();
+            ir << "  " << gep_reg << " = getelementptr inbounds " << obj_type.to_llvm_type()
+               << ", " << obj_type.to_llvm_type() << "* " << obj_ref << ", i32 0, i32 " << field_idx << "\n";
 
-            ir << "  " << reg << " = " << llvm_op << " " << target_type.to_llvm() << " " << L_reg << ", " << R_reg << "\n";
-            return {reg, target_type};
+            std::string val_reg = new_reg();
+            ir << "  " << val_reg << " = load " << field_type.to_llvm_type() << ", "
+               << field_type.to_llvm_type() << "* " << gep_reg << "\n";
+
+            out_type = field_type;
+            return val_reg;
         }
+
         if (auto call = dynamic_cast<CallExprNode*>(expr)) {
-            std::vector<std::string> arg_regs;
-            for (auto& arg : call->args) arg_regs.push_back(lower_expression(arg.get()).first);
-            std::string reg = new_reg();
-            ir << "  " << reg << " = call i64 @" << call->callee << "(";
-            for (size_t i = 0; i < arg_regs.size(); ++i) {
-                ir << "i64 " << arg_regs[i] << (i + 1 < arg_regs.size() ? ", " : "");
+            std::vector<std::string> compiled_args;
+            std::vector<TypeNode> arg_types;
+            for (const auto& arg : call->args) {
+                TypeNode t;
+                compiled_args.push_back(lower_expression(arg.get(), t));
+                arg_types.push_back(t);
+            }
+
+            std::string res_reg = new_reg();
+            ir << "  " << res_reg << " = call i64 @" << call->callee << "(";
+            for (size_t i = 0; i < compiled_args.size(); ++i) {
+                ir << arg_types[i].to_llvm_type() << " " << compiled_args[i];
+                if (i + 1 < compiled_args.size()) ir << ", ";
             }
             ir << ")\n";
-            return {reg, Type{DataType::INT64, ""}};
+            out_type = TypeNode{DataTypeKind::INT64, ""};
+            return res_reg;
         }
-        return {"0", Type{DataType::INT64, ""}};
+
+        return "";
+    }
+
+    void lower_statement(StatementNode* stmt) {
+        if (auto vdecl = dynamic_cast<VarDeclStmtNode*>(stmt)) {
+            std::string alloc_reg = new_reg();
+            ir << "  " << alloc_reg << " = alloca " << vdecl->type.to_llvm_type() << "\n";
+            register_variable(vdecl->name, alloc_reg, vdecl->type);
+
+            if (vdecl->initializer) {
+                TypeNode init_type;
+                std::string init_reg = lower_expression(vdecl->initializer.get(), init_type);
+                ir << "  store " << vdecl->type.to_llvm_type() << " " << init_reg 
+                   << ", " << vdecl->type.to_llvm_type() << "* " << alloc_reg << "\n";
+            }
+        } else if (auto ret = dynamic_cast<ReturnStmtNode*>(stmt)) {
+            if (ret->expr) {
+                TypeNode ret_type;
+                std::string ret_reg = lower_expression(ret->expr.get(), ret_type);
+                ir << "  ret " << ret_type.to_llvm_type() << " " << ret_reg << "\n";
+            } else {
+                ir << "  ret void\n";
+            }
+        } else if (auto estmt = dynamic_cast<ExpressionStmtNode*>(stmt)) {
+            TypeNode dummy;
+            lower_expression(estmt->expr.get(), dummy);
+        }
     }
 
 public:
-    ProductionLLVMGenerator() {
-        ir << "; Tesseract Assembly Output\n";
-        ir << "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-f80:128-n8:16:32:64-S128\"\n";
+    void emit_header() {
+        ir << "; ModuleID = 'tesseract_master'\n";
+        ir << "target datalayout = \"e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128\"\n";
         ir << "target triple = \"aarch64-unknown-linux-android\"\n\n";
-
-        header << "/* Auto-generated C-FFI Header for Tesseract Engine */\n";
-        header << "#ifndef TESS_CORE_H\n#define TESS_CORE_H\n\n#include <stdint.h>\n#include <stdbool.h>\n\n";
-        header << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
-    }
-
-    void register_struct(const StructDeclNode& st) {
-        known_structs[st.name] = st;
     }
 
     void emit_struct(const StructDeclNode& st) {
+        struct_table[st.name] = const_cast<StructDeclNode*>(&st);
         ir << "%struct." << st.name << " = type { ";
-        header << "typedef struct " << st.name << " {\n";
         for (size_t i = 0; i < st.fields.size(); ++i) {
-            ir << st.fields[i].second.to_llvm() << (i + 1 < st.fields.size() ? ", " : "");
-            header << "    " << st.fields[i].second.to_c() << " " << st.fields[i].first << ";\n";
+            ir << st.fields[i].type.to_llvm_type();
+            if (i + 1 < st.fields.size()) ir << ", ";
         }
         ir << " }\n\n";
-        header << "} " << st.name << "_t;\n\n";
     }
 
     void emit_function(const FunctionDeclNode& fn) {
-        reg_counter = 0;
-        scope_table.push_scope();
+        push_scope();
+        reg_counter = 1;
 
-        ir << "define " << fn.return_type.to_llvm() << " @" << fn.name << "(";
-        header << fn.return_type.to_c() << " " << fn.name << "(";
-
+        ir << "define " << fn.return_type.to_llvm_type() << " @" << fn.name << "(";
         for (size_t i = 0; i < fn.params.size(); ++i) {
-            ir << fn.params[i].second.to_llvm() << " %p_" << fn.params[i].first << (i + 1 < fn.params.size() ? ", " : "");
-            header << fn.params[i].second.to_c() << " " << fn.params[i].first << (i + 1 < fn.params.size() ? ", " : "");
+            ir << fn.params[i].type.to_llvm_type() << " %" << fn.params[i].name;
+            if (i + 1 < fn.params.size()) ir << ", ";
         }
         ir << ") {\nentry:\n";
-        header << ");\n";
 
         for (const auto& param : fn.params) {
-            std::string ptr = "%" + param.first + ".addr";
-            ir << "  " << ptr << " = alloca " << param.second.to_llvm() << "\n";
-            ir << "  store " << param.second.to_llvm() << " %p_" << param.first << ", " << param.second.to_llvm() << "* " << ptr << "\n";
-            scope_table.insert(param.first, {ptr, param.second});
+            std::string alloc_reg = new_reg();
+            ir << "  " << alloc_reg << " = alloca " << param.type.to_llvm_type() << "\n";
+            ir << "  store " << param.type.to_llvm_type() << " %" << param.name 
+               << ", " << param.type.to_llvm_type() << "* " << alloc_reg << "\n";
+            register_variable(param.name, alloc_reg, param.type);
         }
 
-        if (fn.body) {
-            for (auto& stmt : fn.body->statements) {
-                if (auto var_decl = dynamic_cast<VarDeclStmtNode*>(stmt.get())) {
-                    std::string ptr = "%" + var_decl->var_name + ".addr";
-                    ir << "  " << ptr << " = alloca " << var_decl->var_type.to_llvm() << "\n";
-                    auto [val_reg, val_type] = lower_expression(var_decl->initializer.get());
-                    ir << "  store " << var_decl->var_type.to_llvm() << " " << val_reg << ", " << var_decl->var_type.to_llvm() << "* " << ptr << "\n";
-                    scope_table.insert(var_decl->var_name, {ptr, var_decl->var_type});
-                } else if (auto expr_stmt = dynamic_cast<ExpressionStmtNode*>(stmt.get())) {
-                    lower_expression(expr_stmt->expr.get());
-                } else if (auto ret = dynamic_cast<ReturnStmtNode*>(stmt.get())) {
-                    if (ret->expr) {
-                        auto [ret_reg, ret_type] = lower_expression(ret->expr.get());
-                        if (fn.return_type.is_float() && ret_type.is_int()) {
-                            std::string conv = new_reg();
-                            ir << "  " << conv << " = sitofp i64 " << ret_reg << " to double\n";
-                            ret_reg = conv;
-                        } else if (fn.return_type.is_int() && ret_type.is_float()) {
-                            std::string conv = new_reg();
-                            ir << "  " << conv << " = fptosi double " << ret_reg << " to i64\n";
-                            ret_reg = conv;
-                        }
-                        ir << "  ret " << fn.return_type.to_llvm() << " " << ret_reg << "\n";
-                    } else {
-                        ir << "  ret void\n";
-                    }
-                }
-            }
+        for (const auto& stmt : fn.body->statements) {
+            lower_statement(stmt.get());
         }
-        if (fn.return_type.kind == DataType::VOID) {
+
+        // Terminal Basic Block Enforcer
+        if (fn.return_type.kind == DataTypeKind::VOID) {
             ir << "  ret void\n";
+        } else if (fn.return_type.kind == DataTypeKind::INT64) {
+            ir << "  ret i64 0\n";
+        } else if (fn.return_type.kind == DataTypeKind::FLOAT64) {
+            ir << "  ret double 0.0\n";
         }
+
         ir << "}\n\n";
-        scope_table.pop_scope();
+        pop_scope();
     }
 
-    void finalize(const std::string& ir_file_path, const std::string& header_file_path) {
-        header << "\n#ifdef __cplusplus\n}\n#endif\n#endif /* TESS_CORE_H */\n";
-
-        std::ofstream ir_out(ir_file_path); ir_out << ir.str(); ir_out.close();
-        std::ofstream h_out(header_file_path); h_out << header.str(); h_out.close();
+    std::string get_ir() const {
+        return ir.str();
     }
 };
 
 // ============================================================================
-// 7. COMPILER MAIN DRIVER
+// 7. C-FFI HEADER GENERATOR
 // ============================================================================
 
-int main(int argc, char* argv[]) {
-    try {
-        std::string workspace_dir = ".";
-        if (argc > 1) workspace_dir = argv[1];
+class CHeaderGenerator {
+public:
+    static std::string generate_c_header(const std::vector<std::unique_ptr<ModuleASTNode>>& modules) {
+        std::stringstream header;
+        header << "#ifndef TESSERACT_CORE_H\n";
+        header << "#define TESSERACT_CORE_H\n\n";
+        header << "#include <stdint.h>\n";
+        header << "#include <stdbool.h>\n\n";
+        header << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
 
-        std::cout << "[Tesseract Compiler]: Indexing workspace: " << fs::absolute(workspace_dir) << "\n";
+        for (const auto& mod : modules) {
+            for (const auto& st : mod->structs) {
+                if (!st->is_pub) continue;
+                header << "typedef struct {\n";
+                for (const auto& f : st->fields) {
+                    std::string ctype = "int64_t";
+                    if (f.type.kind == DataTypeKind::FLOAT64) ctype = "double";
+                    else if (f.type.kind == DataTypeKind::BOOL) ctype = "bool";
+                    header << "    " << ctype << " " << f.name << ";\n";
+                }
+                header << "} " << st->name << ";\n\n";
+            }
 
-        DependencySolver solver;
-        size_t count = 0;
+            for (const auto& fn : mod->functions) {
+                if (!fn->is_pub) continue;
+                std::string ret_type = "int64_t";
+                if (fn->return_type.kind == DataTypeKind::VOID) ret_type = "void";
+                else if (fn->return_type.kind == DataTypeKind::FLOAT64) ret_type = "double";
 
-        for (const auto& entry : fs::directory_iterator(workspace_dir)) {
-            if (entry.is_regular_file() && entry.path().extension() == ".tess") {
-                std::string path = entry.path().string();
-                std::string mod_name = entry.path().stem().string();
-
-                std::ifstream stream(path); if (!stream) continue;
-                std::stringstream ss; ss << stream.rdbuf();
-
-                Lexer lexer(ss.str(), path);
-                Parser parser(std::move(lexer));
-                solver.add_module(parser.parse_module(path, mod_name));
-                count++;
+                header << ret_type << " " << fn->name << "(";
+                for (size_t i = 0; i < fn->params.size(); ++i) {
+                    std::string ptype = "int64_t";
+                    if (fn->params[i].type.kind == DataTypeKind::FLOAT64) ptype = "double";
+                    header << ptype << " " << fn->params[i].name;
+                    if (i + 1 < fn->params.size()) header << ", ";
+                }
+                header << ");\n";
             }
         }
 
-        std::cout << "[Tesseract Compiler]: Loaded " << count << " source files.\n";
-        std::cout << "[Tesseract Compiler]: Resolving module dependencies...\n";
-        std::vector<std::string> order = solver.resolve();
-
-        ProductionLLVMGenerator gen;
-
-        for (const auto& mod : order) {
-            const auto& m = solver.get(mod);
-            for (const auto& st : m.structs) gen.register_struct(*st);
-        }
-
-        for (const auto& mod : order) {
-            const auto& m = solver.get(mod);
-            for (const auto& st : m.structs) gen.emit_struct(*st);
-            for (const auto& fn : m.functions) gen.emit_function(*fn);
-        }
-
-        gen.finalize("tesseract_master.ll", "tess_core.h");
-        std::cout << "[Tesseract Compiler]: Successfully output 'tesseract_master.ll' and 'tess_core.h'.\n";
-
-        std::cout << "[Tesseract Compiler]: Compiling dynamic shared library (libtesseract.so) via Clang...\n";
-        int compile_res = std::system("clang -shared -fPIC tesseract_master.ll -o libtesseract.so");
-
-        if (compile_res == 0) {
-            std::cout << "[Tesseract Compiler]: BUILD SUCCESS -> libtesseract.so created!\n";
-        } else {
-            std::cerr << "[Tesseract Compiler]: Build error -> Clang failed to compile libtesseract.so.\n";
-        }
-
-    } catch (const std::exception& e) {
-        std::cerr << "\n" << e.what() << "\n";
-        return 1;
+        header << "\n#ifdef __cplusplus\n}\n#endif\n\n";
+        header << "#endif // TESSERACT_CORE_H\n";
+        return header.str();
     }
-    return 0;
+};
+
+// ============================================================================
+// 8. COMPILER DRIVER ENTRY POINT
+// ============================================================================
+
+int main(int argc, char* argv[]) {
+    if (argc < 2) {
+        std::cout << "Usage: tess_compiler <entrypoint.tess>\n";
+        return EXIT_FAILURE;
+    }
+
+    std::string entry_file = argv[1];
+    std::cout << "[TESS] Resolving imports and compilation DAG for: " << entry_file << "\n";
+
+    std::vector<std::string> compilation_order = DependencyResolver::resolve_compilation_order(entry_file);
+    std::vector<std::unique_ptr<ModuleASTNode>> parsed_modules;
+
+    ProductionLLVMGenerator llvm_gen;
+    llvm_gen.emit_header();
+
+    for (const auto& file : compilation_order) {
+        std::cout << "[TESS] Parsing: " << file << "\n";
+        std::ifstream ifs(file);
+        std::stringstream ss;
+        ss << ifs.rdbuf();
+
+        Lexer lexer(ss.str(), file);
+        Parser parser(lexer);
+        auto mod = parser.parse_module(file);
+
+        for (const auto& st : mod->structs) llvm_gen.emit_struct(*st);
+        for (const auto& fn : mod->functions) llvm_gen.emit_function(*fn);
+
+        parsed_modules.push_back(std::move(mod));
+    }
+
+    std::cout << "[TESS] Writing LLVM IR: tesseract_master.ll\n";
+    std::ofstream ir_file("tesseract_master.ll");
+    ir_file << llvm_gen.get_ir();
+    ir_file.close();
+
+    std::cout << "[TESS] Writing C Header: tess_core.h\n";
+    std::ofstream h_file("tess_core.h");
+    h_file << CHeaderGenerator::generate_c_header(parsed_modules);
+    h_file.close();
+
+    std::cout << "[TESS] Compiling LLVM IR to native object...\n";
+    int res = std::system("clang -O3 -c tesseract_master.ll -o tesseract_master.o");
+    if (res != 0) {
+        std::cerr << "[TESS Error] Host clang execution failed or failed to produce target binaries.\n";
+        return EXIT_FAILURE;
+    }
+
+    std::cout << "[TESS] Build completed successfully. Generated tesseract_master.o and tess_core.h.\n";
+    return EXIT_SUCCESS;
 }
