@@ -56,14 +56,11 @@ static JNIEnv* get_jni_env(int* needs_detach) {
     
     if (g_jvm == NULL) return NULL;
     
-    jint res = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
+    // Fixed: Correct C++ syntax for JavaVM object structures
+    jint res = g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6);
     if (res == JNI_EDETACHED) {
         // Native thread is loose. Explicitly attach it to prevent an OS abort crash.
-        #ifdef __ANDROID__
-        res = (*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL);
-        #else
-        res = (*g_jvm)->AttachCurrentThread(g_jvm, (void**)&env, NULL);
-        #endif
+        res = g_jvm->AttachCurrentThread(&env, NULL);
         if (res == JNI_OK) {
             *needs_detach = 1;
         } else {
@@ -78,9 +75,7 @@ static JNIEnv* get_jni_env(int* needs_detach) {
 // JNI INTERFACE IMPLEMENTATIONS (Exposed for Android Java)
 // ----------------------------------------------------------------------------
 
-#ifdef __cplusplus
 extern "C" {
-#endif
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_jvm = vm;
@@ -92,9 +87,9 @@ JNIEXPORT void JNICALL
 Java_com_tesseract_ui_TessEngine_nativeInit(JNIEnv* env, jobject thiz) {
     pthread_mutex_lock(&g_render_mutex);
 
-    // Release any previously pinned instance to prevent reference leaks
+    // Fixed: Correct C++ syntax for JNIEnv object structures
     if (g_engine_global_ref != NULL) {
-        (*env)->DeleteGlobalRef(env, g_engine_global_ref);
+        env->DeleteGlobalRef(g_engine_global_ref);
         g_engine_global_ref = NULL;
     }
 
@@ -103,7 +98,7 @@ Java_com_tesseract_ui_TessEngine_nativeInit(JNIEnv* env, jobject thiz) {
     }
 
     // Pin calling Java object globally to shield it from Garbage Collection sweep passes
-    g_engine_global_ref = (*env)->NewGlobalRef(env, thiz);
+    g_engine_global_ref = env->NewGlobalRef(thiz);
     
     // Allocate the bare-metal processing target frame context
     g_native_ctx = tess_create();
@@ -131,8 +126,9 @@ JNIEXPORT void JNICALL
 Java_com_tesseract_ui_TessEngine_nativeShutdown(JNIEnv* env, jobject thiz) {
     pthread_mutex_lock(&g_render_mutex);
 
+    // Fixed: Correct C++ syntax for JNIEnv object structures
     if (g_engine_global_ref != NULL) {
-        (*env)->DeleteGlobalRef(env, g_engine_global_ref);
+        env->DeleteGlobalRef(g_engine_global_ref);
         g_engine_global_ref = NULL;
     }
 
@@ -145,6 +141,4 @@ Java_com_tesseract_ui_TessEngine_nativeShutdown(JNIEnv* env, jobject thiz) {
     pthread_mutex_unlock(&g_render_mutex);
 }
 
-#ifdef __cplusplus
-}
-#endif
+} // extern "C"
