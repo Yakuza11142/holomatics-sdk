@@ -1,61 +1,161 @@
-# Tess Compiler Configuration
-target: native
-optimization_level: O3
-vector_lane_width: 64
+#include <iostream>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <sstream>
+#include <cstdlib>
+#include <memory>
 
-build:
-  entry_point: "main.tess"
-  output_dir: "build"
-  binary_name: "tesseract_app"
-  embed_resources: true
-  compiler_source: "tess_compiler.cpp"
+/* Platform Abstractions */
+#if defined(_WIN32) || defined(_WIN64)
+    #define TESS_PATH_SEP '\\'
+    #define TESS_PLATFORM_WIN 1
+#else
+    #define TESS_PATH_SEP '/'
+    #define TESS_PLATFORM_POSIX 1
+#endif
 
-rendering:
-  pipeline: "holographic_vector"
-  gpu_acceleration: true
-  vram_allocation_mb: 512
+struct CompilerConfig {
+    std::string target = "native";
+    std::string opt_level = "O3";
+    int vector_lane_width = 64;
+    std::string entry_point = "main.tess";
+    std::string output_dir = "build";
+    std::string binary_name = "tesseract_app";
+    bool embed_resources = true;
+    std::string compiler_source = "tess_compiler.cpp";
+    std::string rendering_pipeline = "holographic_vector";
+    bool gpu_accel = true;
+    int vram_mb = 512;
+    std::string sdk_version = "1.0.0";
+    std::string entry_bundle = "tesseract_ui.tess";
+    std::vector<std::string> modules;
+    std::vector<std::string> source_files;
+};
 
-sdk:
-  version: "1.0.0"
-  entry_bundle: "tesseract_ui.tess"
-  modules:
-    - TesseractUI.Animation
-    - TesseractUI.Assets
-    - TesseractUI.Async
-    - TesseractUI.Audio
-    - TesseractUI.Camera
-    - TesseractUI.Core
-    - TesseractUI.Input
-    - TesseractUI.Layout
-    - TesseractUI.Network
-    - TesseractUI.Particles
-    - TesseractUI.Physics
-    - TesseractUI.Router
-    - TesseractUI.Shaders
-    - TesseractUI.State
-    - TesseractUI.Storage
-    - TesseractUI.Telemetry
-    - TesseractUI.Text
+/* Portable Helper: Trim whitespace */
+static std::string trim(const std::string& str) {
+    size_t first = str.find_first_not_of(" \t\r\n");
+    if (std::string::npos == first) return "";
+    size_t last = str.find_last_not_of(" \t\r\n");
+    return str.substr(first, (last - first + 1));
+}
 
-files:
-  - animation.tess
-  - assets.tess
-  - async.tess
-  - audio.tess
-  - camera.tess
-  - core.tess
-  - input.tess
-  - layout.tess
-  - main.tess
-  - network.tess
-  - particles.tess
-  - physics.tess
-  - router.tess
-  - shaders.tess
-  - state.tess
-  - storage.tess
-  - telemetry.tess
-  - tess
-  - tess_compiler.cpp
-  - tesseract_ui.tess
-  - text.tess
+/* Parse YAML-like Tess Compiler configuration directly */
+bool load_tess_config(const std::string& filepath, CompilerConfig& config) {
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+        std::cerr << "[Tess Compiler Error] Could not open config file: " << filepath << std::endl;
+        return false;
+    }
+
+    std::string line;
+    std::string current_section = "";
+
+    while (std::getline(file, line)) {
+        std::string cleaned = trim(line);
+        if (cleaned.empty() || cleaned[0] == '#') continue;
+
+        if (cleaned == "build:") { current_section = "build"; continue; }
+        if (cleaned == "rendering:") { current_section = "rendering"; continue; }
+        if (cleaned == "sdk:") { current_section = "sdk"; continue; }
+        if (cleaned == "modules:") { current_section = "modules"; continue; }
+        if (cleaned == "files:") { current_section = "files"; continue; }
+
+        if (cleaned.find("- ") == 0) {
+            std::string item = trim(cleaned.substr(2));
+            if (current_section == "modules") {
+                config.modules.push_back(item);
+            } else if (current_section == "files") {
+                config.source_files.push_back(item);
+            }
+            continue;
+        }
+
+        size_t colon_pos = cleaned.find(':');
+        if (colon_pos != std::string::npos) {
+            std::string key = trim(cleaned.substr(0, colon_pos));
+            std::string val = trim(cleaned.substr(colon_pos + 1));
+
+            // Strip quotes
+            if (val.size() >= 2 && val.front() == '"' && val.back() == '"') {
+                val = val.substr(1, val.size() - 2);
+            }
+
+            if (key == "target") config.target = val;
+            else if (key == "optimization_level") config.opt_level = val;
+            else if (key == "vector_lane_width") config.vector_lane_width = std::atoi(val.c_str());
+            else if (key == "entry_point") config.entry_point = val;
+            else if (key == "output_dir") config.output_dir = val;
+            else if (key == "binary_name") config.binary_name = val;
+            else if (key == "embed_resources") config.embed_resources = (val == "true");
+            else if (key == "pipeline") config.rendering_pipeline = val;
+            else if (key == "gpu_acceleration") config.gpu_accel = (val == "true");
+            else if (key == "vram_allocation_mb") config.vram_mb = std::atoi(val.c_str());
+            else if (key == "version") config.sdk_version = val;
+            else if (key == "entry_bundle") config.entry_bundle = val;
+        }
+    }
+
+    return true;
+}
+
+int main(int argc, char* argv[]) {
+    std::string config_path = "tess_config.yaml";
+    if (argc > 1) {
+        config_path = argv[1];
+    }
+
+    CompilerConfig config;
+    std::cout << "[Tess Toolchain] Loading configuration from " << config_path << "..." << std::endl;
+    if (!load_tess_config(config_path, config)) {
+        return 1;
+    }
+
+    std::cout << "----------------------------------------------------" << std::endl;
+    std::cout << " TESSERACT COMPILER v" << config.sdk_version << " [Host & Target: " << config.target << "]" << std::endl;
+    std::cout << " Pipeline: " << config.rendering_pipeline << " | VRAM: " << config.vram_mb << "MB" << std::endl;
+    std::cout << " SIMD Vector Width: " << config.vector_lane_width << " lanes" << std::endl;
+    std::cout << " Active Framework Modules: " << config.modules.size() << std::endl;
+    std::cout << " Source Files Discovered: " << config.source_files.size() << std::endl;
+    std::cout << "----------------------------------------------------" << std::endl;
+
+    // Create target output directory portably
+    std::string mkdir_cmd;
+#if defined(TESS_PLATFORM_WIN)
+    mkdir_cmd = "if not exist \"" + config.output_dir + "\" mkdir \"" + config.output_dir + "\"";
+#else
+    mkdir_cmd = "mkdir -p \"" + config.output_dir + "\"";
+#endif
+    std::system(mkdir_cmd.c_str());
+
+    // Construct backend compilation command with strict standard flags
+    std::stringstream build_cmd;
+
+#if defined(TESS_PLATFORM_WIN) && defined(_MSC_VER)
+    /* MSVC Compiler Flags */
+    build_cmd << "cl /std:c++20 /O2 /EHsc ";
+    build_cmd << "/D TESS_VECTOR_WIDTH=" << config.vector_lane_width << " ";
+    build_cmd << "/Fe\"" << config.output_dir << TESS_PATH_SEP << config.binary_name << ".exe\" ";
+    build_cmd << config.compiler_source;
+#else
+    /* GCC / Clang Flags with native optimization and SIMD width definitions */
+    build_cmd << "g++ -std=c++20 -" << config.opt_level << " -march=native ";
+    build_cmd << "-DTESS_VECTOR_WIDTH=" << config.vector_lane_width << " ";
+    build_cmd << "-o \"" << config.output_dir << TESS_PATH_SEP << config.binary_name << "\" ";
+    build_cmd << config.compiler_source;
+#endif
+
+    std::cout << "[Tess Toolchain] Executing compilation string:" << std::endl;
+    std::cout << "  " << build_cmd.str() << std::endl;
+
+    int sys_status = std::system(build_cmd.str().c_str());
+    if (sys_status == 0) {
+        std::cout << "\n[Tess Toolchain] Build succeeded. Binary ready at: " 
+                  << config.output_dir << TESS_PATH_SEP << config.binary_name << std::endl;
+        return 0;
+    } else {
+        std::cerr << "\n[Tess Toolchain] Compilation failed with status code: " << sys_status << std::endl;
+        return sys_status;
+    }
+}
