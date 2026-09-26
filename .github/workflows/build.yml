@@ -32,12 +32,23 @@ jobs:
 
       - name: Run Tesseract Compiler (Dynamically Map All Project Files)
         run: |
-          # 🛠️ DYNAMIC SOURCE DISCOVERY:
-          # Automatically sweeps app/, src/, and library/ folders to grab every engine source module
-          TARGET_FILES=$(find app/ src/ library/ -type f \( -name "*.rs" -o -name "*.cpp" -o -name "*.c" -o -name "*.tess" \))
+          # 🛠️ ROOT-LEVEL SWEEP:
+          # Searches your entire workspace directory structure for source files,
+          # while explicitly ignoring hidden tracking files and the compiler itself.
+          TARGET_FILES=$(find . -type f \( -name "*.rs" -o -name "*.cpp" -o -name "*.c" -o -name "*.tess" \) \
+            ! -path "*/.**" \
+            ! -name "tess_compiler.cpp" \
+            ! -name "tesseract_compiler" \
+            ! -name "TessBridge.c")
           
           echo "🚀 Feeding the following tracked files into your custom compiler:"
           echo "$TARGET_FILES"
+          
+          # 🚨 SAFETY LATCH: Prevent empty builds by forcing an explicit exit code if no files are found
+          if [ -z "$TARGET_FILES" ]; then
+            echo "❌ CRITICAL ERROR: No engine source files found in the workspace!"
+            exit 1
+          fi
           
           # Execute your custom compiler engine with all collected target source components passed at once
           ./tesseract_compiler $TARGET_FILES
