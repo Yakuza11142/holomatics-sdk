@@ -14,12 +14,6 @@ jobs:
       - name: Checkout Codebase
         uses: actions/checkout@v4
 
-      - name: Verify Live Source Code File Locations
-        run: |
-          echo "=== ROOT DIRECTORY TREES ==="
-          ls -R
-          echo "============================"
-
       - name: Install LLVM, Clang, and Toolchain Dependencies
         run: |
           sudo apt-get update
@@ -29,29 +23,38 @@ jobs:
         run: |
           g++ -std=c++20 -O3 tess_compiler.cpp -o tesseract_compiler
 
-      - name: Run Tesseract Compiler (Force-Target Android ARM64)
+      - name: Run Tesseract Compiler (Symlink Intercept for Android ARM64)
         run: |
-          # 1. Locate the pre-installed Android NDK toolchain architecture
+          # 1. Locate the pre-installed Android NDK on the runner image
           NDK_PATH="${ANDROID_NDK_LATEST_HOME}"
           if [ -z "$NDK_PATH" ]; then
             NDK_PATH="${ANDROID_HOME}/ndk-bundle"
           fi
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
+          ANDROID_CLANG="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
           
-          # 2. Sweep the workspace to gather all custom spatial modules
+          # 2. Create a temporary local path bin directory
+          mkdir -p $HOME/bin
+          
+          # 3. 🛠️ SYSTEM INTERCEPT: Create shell wrappers to force system clang to cross-compile for Android
+          echo -e "#!/bin/bash\n$ANDROID_CLANG -target aarch64-linux-android24 \"\$@\"" > $HOME/bin/clang
+          echo -e "#!/bin/bash\n$ANDROID_CLANG++ -target aarch64-linux-android24 \"\$@\"" > $HOME/bin/clang++
+          chmod +x $HOME/bin/clang $HOME/bin/clang++
+          
+          # 4. Prepend our intercept bin to the front of the system execution PATH environment variable
+          export PATH="$HOME/bin:$PATH"
+          
+          # Verify the intercept is active (Should report target: aarch64-linux-android)
+          clang -v
+          
+          # 5. Sweep the workspace to gather all custom spatial modules
           TARGET_FILES=$(find . -type f \( -name "*.rs" -o -name "*.cpp" -o -name "*.c" -o -name "*.tess" \) \
             ! -path "*/.**" \
             ! -name "tess_compiler.cpp" \
             ! -name "tesseract_compiler" \
             ! -name "TessBridge.c")
           
-          echo "🚀 Funneling modules through custom engine compiler..."
-          
-          # 3. 🛠️ ARCHITECTURE OVERRIDE INTERCEPT:
-          # Force your backend toolchain to generate mobile ARM64 objects instead of x86_64 desktop objects
-          export CLANG="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
-          export CFLAGS="-target aarch64-linux-android24 -fPIC"
-          
+          echo "🚀 Funneling modules through custom engine compiler toolchain..."
           ./tesseract_compiler $TARGET_FILES
 
       - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
@@ -70,7 +73,7 @@ jobs:
           echo "🔨 Final Linking Configuration:"
           echo "   Objects: $OBJECT_FILES"
           
-          # Cross-compile your bridge and your newly generated mobile ARM64 object file cleanly
+          # Cross-compile your JNI bridge and your newly generated mobile ARM64 object file cleanly
           $CLANG_CC -shared -fPIC -O3 -pthread \
             $INCLUDE_FLAGS \
             TessBridge.c $OBJECT_FILES \
