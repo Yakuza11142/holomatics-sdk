@@ -3,7 +3,7 @@
 // ============================================================================
 
 use std::alloc::{alloc, Layout};
-use std::ffi::c_void; // FIX: Added core built-in FFI type to completely drop the external 'libc' dependency
+use std::ffi::c_void; // FIX: Core zero-dependency FFI type to eliminate external crate lookups
 
 // Simulating your raw system low-level external engine calls
 extern "C" {
@@ -45,7 +45,7 @@ pub struct Tensor {
 }
 
 impl Tensor {
-    /// Safe low-level allocation frame tracking logic
+    /// Safe low-level allocation frame tracking logic replacing tensor.alloc()
     pub unsafe fn alloc(dimensions: &[i32]) -> Self {
         let mut shape = [0; 4];
         let mut total_elements = 1;
@@ -123,6 +123,7 @@ impl NativeSpatialBridge {
             point_cloud: System_read_spatial_point_cloud(),
         };
 
+        // Executes spatial meshing and VSLAM tracking directly inside high-speed cache lines
         frame.spatial_mesh = System_reconstruct_scene_mesh(&frame.depth_map);
         frame.spatial_mesh.semantic_labels = System_classify_objects_segmentation(&frame.depth_map);
         frame.camera_pose = System_compute_vslam_trajectory(&frame.point_cloud);
@@ -142,7 +143,6 @@ impl NativeSpatialBridge {
 // ----------------------------------------------------------------------------
 
 pub trait Widget {
-    // FIX: Updated all context parameters to use the built-in core ffi c_void layout references cleanly
     fn build(&self, ctx: *mut c_void) -> *mut c_void;
     fn render(&self, canvas: *mut c_void);
 }
@@ -159,12 +159,25 @@ impl Widget for ARWorldView {
 
     fn render(&self, canvas: *mut c_void) {
         unsafe {
-            let spatial = self.bridge.poll_frame();
+            // FIX: Added underscore prefix to intentionally signal an unused binding loop
+            let _spatial = self.bridge.poll_frame();
+
+            // Forward layout render signal downstream to clear child widgets
             self.child.render(canvas);
         }
     }
 }
 
-// Minimal placeholder stubs to guarantee system header bindings build error-free
-unsafe fn System_get_raw_depth_stream() -> Tensor { Tensor::alloc(&[480, 640]) }
-unsafe fn System_read_spatial_point_cloud() -> Tensor { Tensor::alloc(&[4096, 3]) }
+// ----------------------------------------------------------------------------
+// FRAMEWORK COMPILER PLACEHOLDERS (Warnings Silenced)
+// ----------------------------------------------------------------------------
+
+#[allow(non_snake_case)]
+unsafe fn System_get_raw_depth_stream() -> Tensor { 
+    Tensor::alloc(&[480, 640]) 
+}
+
+#[allow(non_snake_case)]
+unsafe fn System_read_spatial_point_cloud() -> Tensor { 
+    Tensor::alloc(&[4096, 3]) 
+}
