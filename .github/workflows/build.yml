@@ -40,22 +40,27 @@ jobs:
           CLANG_C="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
           CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
           
-          # 3. Restrict inclusion lookups to root structures
+          # 3. Restrict inclusion lookups to root and src structures
           INCLUDE_FLAGS="-I. -I./src"
           
           # 4. Gather all loose native C engine core source modules from the root/src space
           CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" ! -name "TessBridge.c")
           
           echo "🔨 Compiling loose C engine components into mobile object modules..."
-          # FIX: Added '-DTessMatrix4x4=TessMatrix4x4_Bypass' to seamlessly bypass duplicate typedef collisions,
-          # while keeping our master pre-include macro guards and warning suppressions active.
+          # FIX: Isolated the '-include' flag strictly to tesseract_concurrency.c to prevent cross-header collisions!
           for file in $CORE_C_FILES; do
-             $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -DTessMatrix4x4=TessMatrix4x4_Bypass -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+             if [[ "$file" == *"tesseract_concurrency.c"* ]]; then
+                 echo "🔗 Injecting master engine context definitions into: $file"
+                 $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+             else
+                 # All other modules compile natively using their own tracking headers cleanly
+                 $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+             fi
           done
           
           # 5. Compile the JNI bridge file as pure C++ to link accurately with NDK system structures
           echo "🔨 Compiling thread-safe JNI interface layer..."
-          $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -DTessMatrix4x4=TessMatrix4x4_Bypass -Wno-macro-redefined TessBridge.c -o TessBridge.o
+          $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -Wno-macro-redefined TessBridge.c -o TessBridge.o
           
           # 6. Gather all newly generated ARM64 native object files
           OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o")
