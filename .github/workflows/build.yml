@@ -47,7 +47,7 @@ jobs:
           CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" ! -name "TessBridge.c")
           
           echo "🔨 Compiling loose C engine components into mobile object modules..."
-          # FIX: Isolated the '-include' flag strictly to tesseract_concurrency.c to prevent cross-header collisions!
+          # FIX: Explicitly removed the -DTessMatrix4x4 macro flag to eliminate the renaming loop entirely
           for file in $CORE_C_FILES; do
              if [[ "$file" == *"tesseract_concurrency.c"* ]]; then
                  echo "🔗 Injecting master engine context definitions into: $file"
@@ -60,7 +60,7 @@ jobs:
           
           # 5. Compile the JNI bridge file as pure C++ to link accurately with NDK system structures
           echo "🔨 Compiling thread-safe JNI interface layer..."
-          $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -Wno-macro-redefined TessBridge.c -o TessBridge.o
+          $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS TessBridge.c -o TessBridge.o
           
           # 6. Gather all newly generated ARM64 native object files
           OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o")
