@@ -43,11 +43,18 @@ jobs:
           # 3. Explicitly link search paths to eliminate recursive path conflicts
           INCLUDE_FLAGS="-I. -I./src"
           
-          # 4. Gather all loose native C engine core source modules
-          CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" ! -name "TessBridge.c")
+          # 4. Gather active native C engine core modules while strictly dropping old legacy duplicate files
+          CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" \
+            ! -name "TessBridge.c" \
+            ! -name "tesseract_pro.c" \
+            ! -name "tesseract_queue.c" \
+            ! -name "tesseract_unified.c" \
+            ! -name "tesseract_core.c")
+          
+          echo "🚀 Compiling selected active C engine files:"
+          echo "$CORE_C_FILES"
           
           echo "🔨 Compiling loose C engine components into mobile object modules..."
-          # Compiling core C files using the true C compiler ($CLANG_C) with explicit empty macro padding
           for file in $CORE_C_FILES; do
              if [[ "$file" == *"tesseract_concurrency.c"* ]]; then
                  $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -DTESS_API="" -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
@@ -60,11 +67,11 @@ jobs:
           echo "🔨 Compiling thread-safe JNI interface layer..."
           $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" TessBridge.c -o TessBridge.o
           
-          # 6. Gather all newly generated ARM64 native object files
+          # 6. Gather all newly generated active ARM64 native object files
           OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o")
           
           echo "🔨 Packaging final unified shared library: libTessSDK.so"
-          # Link all mobile object modules and your Rust static library into your final framework package
+          # Link all valid object modules and your Rust static library into your final framework package
           $CLANG_CC -shared -fPIC -O3 -pthread \
             $OBJECT_FILES -L. -ltesseract_ui \
             -landroid -llog \
