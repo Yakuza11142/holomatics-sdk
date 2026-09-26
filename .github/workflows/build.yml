@@ -14,7 +14,6 @@ jobs:
       - name: Checkout Codebase
         uses: actions/checkout@v4
 
-      # 🔍 DIAGNOSTIC: Prints your live repository workspace layout for reference mapping
       - name: Verify Live Source Code File Locations
         run: |
           echo "=== ROOT DIRECTORY TREES ==="
@@ -32,8 +31,6 @@ jobs:
 
       - name: Run Tesseract Compiler (Dynamically Map All Project Files)
         run: |
-          # 🛠️ DYNAMIC SOURCE DISCOVERY:
-          # Automatically sweeps the workspace to gather all custom spatial modules
           TARGET_FILES=$(find . -type f \( -name "*.rs" -o -name "*.cpp" -o -name "*.c" -o -name "*.tess" \) \
             ! -path "*/.**" \
             ! -name "tess_compiler.cpp" \
@@ -57,17 +54,21 @@ jobs:
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
           
-          # 3. 🛠️ AGGREGATE CORE MAPPING:
-          # Collects your JNI interface, your compiler's actual machine code object output (tesseract_out.o),
-          # and all supporting engine implementation files into a unified pool.
-          CORE_C_FILES=$(find . -type f -name "tesseract_*.c" ! -name "TessBridge.c")
+          # 3. 🛠️ FULL SOURCE DIRECTORY LINKING INJECTION:
+          # Automatically map header files across all subfolders to eliminate "file not found" traps
+          INCLUDE_FLAGS=$(find . -type d ! -path "*/.**" | sed 's/^/-I /' | tr '\n' ' ')
           
-          echo "🔨 Forcibly linking compiled engine targets: tesseract_out.o $CORE_C_FILES"
+          # 4. Gather compiled native engine objects (*.o) output by your toolchain
+          OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o" ! -name "tesseract_compiler")
           
-          # Cross-compile everything together directly into the final, full-weight dynamic library
+          echo "🔨 Final Linking Configuration:"
+          echo "   Headers: $INCLUDE_FLAGS"
+          echo "   Objects: $OBJECT_FILES"
+          
+          # Cross-compile your JNI bridge, master IR assembly, and compiled objects together
           $CLANG_CC -shared -fPIC -O3 -pthread \
-            -I./ \
-            TessBridge.c tesseract_master.ll tesseract_out.o $CORE_C_FILES \
+            $INCLUDE_FLAGS \
+            TessBridge.c tesseract_master.ll $OBJECT_FILES \
             -landroid -llog \
             -o libTessSDK.so
 
@@ -75,7 +76,6 @@ jobs:
         run: |
           file libTessSDK.so
           echo "--- Exported Defined Symbols ---"
-          # Using LLVM-NM to verify your core logic methods are cleanly exposed
           llvm-nm -D --defined-only libTessSDK.so
 
       - name: Upload Build Artifacts
@@ -86,4 +86,4 @@ jobs:
             libTessSDK.so
             tess_core.h
             tesseract_master.ll
-            tesseract_out.o
+            *.o
