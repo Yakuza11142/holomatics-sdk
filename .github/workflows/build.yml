@@ -37,21 +37,19 @@ jobs:
           
           # 2. Select the cross-compiler toolchain parameters for ARM64 Android devices
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
-          
-          # FIX: Define separate C and C++ cross-compilers to prevent language conflicts
           CLANG_C="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
           CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
           
-          # 3. Dynamic header map scan to link file namespaces across subfolders
-          INCLUDE_FLAGS=$(find . -type d ! -path "*/.**" | sed 's/^/-I /' | tr '\n' ' ')
+          # 3. FIX: Prioritize the local root directory context at the absolute front (-I .)
+          # This guarantees the compiler maps your main headers first instead of nested subsets.
+          INCLUDE_FLAGS="-I . $(find . -type d ! -path "*/.**" ! -path "." | sed 's/^/-I /' | tr '\n' ' ')"
           
           # 4. Gather all loose native C engine core source modules
           CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" ! -name "TessBridge.c")
           
           echo "🔨 Compiling loose C engine components into mobile object modules..."
-          # Force compile C files using the pure C compiler ($CLANG_C) with atomic definitions enabled
           for file in $CORE_C_FILES; do
-             $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+             $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
           done
           
           # 5. Compile the JNI bridge file as pure C++ to link accurately with NDK system structures
