@@ -3,7 +3,7 @@
 // ============================================================================
 
 use std::alloc::{alloc, Layout};
-use std::ptr;
+use std::ffi::c_void; // FIX: Added core built-in FFI type to completely drop the external 'libc' dependency
 
 // Simulating your raw system low-level external engine calls
 extern "C" {
@@ -45,7 +45,7 @@ pub struct Tensor {
 }
 
 impl Tensor {
-    /// Safe low-level allocation frame tracking logic replacing tensor.alloc()
+    /// Safe low-level allocation frame tracking logic
     pub unsafe fn alloc(dimensions: &[i32]) -> Self {
         let mut shape = [0; 4];
         let mut total_elements = 1;
@@ -106,7 +106,6 @@ impl NativeSpatialBridge {
     }
 
     /// Pulls, structures, and refines live sensor framework frames.
-    /// Replaces the hybrid SIMD width macro with a vectorized execution pass.
     #[no_mangle]
     pub unsafe extern "C" fn poll_frame(&self) -> ARSpatialFrame {
         let mut frame = ARSpatialFrame {
@@ -124,8 +123,6 @@ impl NativeSpatialBridge {
             point_cloud: System_read_spatial_point_cloud(),
         };
 
-        // 🛠️ VECTORIZED LOOP EXECUTION: Replaces lane(width: 64) for maximum efficiency
-        // Executes spatial meshing and VSLAM tracking directly inside high-speed cache lines
         frame.spatial_mesh = System_reconstruct_scene_mesh(&frame.depth_map);
         frame.spatial_mesh.semantic_labels = System_classify_objects_segmentation(&frame.depth_map);
         frame.camera_pose = System_compute_vslam_trajectory(&frame.point_cloud);
@@ -145,8 +142,9 @@ impl NativeSpatialBridge {
 // ----------------------------------------------------------------------------
 
 pub trait Widget {
-    fn build(&self, ctx: *mut libc::c_void) -> *mut libc::c_void;
-    fn render(&self, canvas: *mut libc::c_void);
+    // FIX: Updated all context parameters to use the built-in core ffi c_void layout references cleanly
+    fn build(&self, ctx: *mut c_void) -> *mut c_void;
+    fn render(&self, canvas: *mut c_void);
 }
 
 pub struct ARWorldView {
@@ -155,20 +153,13 @@ pub struct ARWorldView {
 }
 
 impl Widget for ARWorldView {
-    fn build(&self, ctx: *mut libc::c_void) -> *mut libc::c_void {
+    fn build(&self, ctx: *mut c_void) -> *mut c_void {
         self.child.build(ctx)
     }
 
-    fn render(&self, canvas: *mut libc::c_void) {
+    fn render(&self, canvas: *mut c_void) {
         unsafe {
-            // Poll hardware sensor pipeline matrices
             let spatial = self.bridge.poll_frame();
-
-            // Direct drawing operations pushed straight to graphics framebuffers
-            // e.g., Canvas_set_spatial_transforms(canvas, &spatial.view_matrix, ...);
-            // e.g., Canvas_draw_world_reconstruction_mesh(canvas, &spatial.spatial_mesh);
-            
-            // Forward layout render signal downstream to clear child widgets
             self.child.render(canvas);
         }
     }
