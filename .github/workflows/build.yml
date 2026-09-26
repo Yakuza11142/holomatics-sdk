@@ -18,13 +18,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang llvm
-          # Install the official cross-compilation compiler target for Android ARM64 hardware
           rustup target add aarch64-linux-android
 
       - name: Compile Core Rust Spatial Module (tesseract_ui.rs)
         run: |
-          # Compile your pure Rust module directly into a high-performance static archive object
-          # Using --crate-type=staticlib forcefully packs all internal calculations into the binary pool
+          # Compile your pure Rust module directly into a high-performance static library object
           rustc --target aarch64-linux-android -O --crate-type=staticlib tesseract_ui.rs -o libtesseract_ui.a
 
       - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
@@ -37,23 +35,36 @@ jobs:
           
           echo "🤖 Utilizing Android NDK located at: $NDK_PATH"
           
-          # 2. Select the cross-compiler toolchain for ARM64 Android devices
+          # 2. Select the cross-compiler toolchain parameters for ARM64 Android devices
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
+          
+          # FIX: Define separate C and C++ cross-compilers to prevent language conflicts
+          CLANG_C="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
           CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
           
           # 3. Dynamic header map scan to link file namespaces across subfolders
           INCLUDE_FLAGS=$(find . -type d ! -path "*/.**" | sed 's/^/-I /' | tr '\n' ' ')
           
-          # 4. Gather all loose native C/C++ engine core source modules
-          CORE_C_FILES=$(find . -maxdepth 2 -type f \( -name "tesseract_*.c" -o -name "tesseract_*.cpp" \) ! -name "TessBridge.c")
+          # 4. Gather all loose native C engine core source modules
+          CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" ! -name "TessBridge.c")
           
-          echo "🔨 Packaging final unified library with Rust core and C/C++ files..."
+          echo "🔨 Compiling loose C engine components into mobile object modules..."
+          # Force compile C files using the pure C compiler ($CLANG_C) with atomic definitions enabled
+          for file in $CORE_C_FILES; do
+             $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+          done
           
-          # Cross-compile everything together directly into your true production asset package
-          # Links your thread-safe JNI bridge, loose C/C++ cores, and compiled Rust static library together
+          # 5. Compile the JNI bridge file as pure C++ to link accurately with NDK system structures
+          echo "🔨 Compiling thread-safe JNI interface layer..."
+          $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS TessBridge.c -o TessBridge.o
+          
+          # 6. Gather all newly generated ARM64 native object files
+          OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o")
+          
+          echo "🔨 Packaging final unified shared library: libTessSDK.so"
+          # Link all mobile object modules and your Rust static library into your final framework package
           $CLANG_CC -shared -fPIC -O3 -pthread \
-            $INCLUDE_FLAGS \
-            TessBridge.c $CORE_C_FILES -L. -ltesseract_ui \
+            $OBJECT_FILES -L. -ltesseract_ui \
             -landroid -llog \
             -o libTessSDK.so
 
@@ -61,7 +72,6 @@ jobs:
         run: |
           file libTessSDK.so
           echo "--- Exported Defined Symbols ---"
-          # Using LLVM-NM to verify your C-ABI symbols are cleanly exposed
           llvm-nm -D --defined-only libTessSDK.so
 
       - name: Upload Build Artifacts
