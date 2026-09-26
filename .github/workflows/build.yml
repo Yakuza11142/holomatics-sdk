@@ -14,7 +14,7 @@ jobs:
       - name: Checkout Codebase
         uses: actions/checkout@v4
 
-      # 🔍 CRITICAL DIAGNOSTIC: Prints exactly where your files reside in the runner workspace
+      # 🔍 DIAGNOSTIC: Prints your live repository workspace layout for reference mapping
       - name: Verify Live Source Code File Locations
         run: |
           echo "=== ROOT DIRECTORY TREES ==="
@@ -30,11 +30,17 @@ jobs:
         run: |
           g++ -std=c++20 -O3 tess_compiler.cpp -o tesseract_compiler
 
-      - name: Run Tesseract Compiler (Process Source Directories)
+      - name: Run Tesseract Compiler (Dynamically Map All Project Files)
         run: |
-          # NOTE: Review the "Verify Live Source Code File Locations" log output above. 
-          # If your files are deeper (e.g., app/src/main/cpp/), update these arguments to match.
-          ./tesseract_compiler src/ app/ library/
+          # 🛠️ DYNAMIC SOURCE DISCOVERY:
+          # Automatically sweeps app/, src/, and library/ folders to grab every engine source module
+          TARGET_FILES=$(find app/ src/ library/ -type f \( -name "*.rs" -o -name "*.cpp" -o -name "*.c" -o -name "*.tess" \))
+          
+          echo "🚀 Feeding the following tracked files into your custom compiler:"
+          echo "$TARGET_FILES"
+          
+          # Execute your custom compiler engine with all collected target source components passed at once
+          ./tesseract_compiler $TARGET_FILES
 
       - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
         run: |
@@ -50,7 +56,7 @@ jobs:
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
           
-          # 3. Execute cross-compilation linking your bridge and your compiler's output
+          # 3. Securely cross-compile your thread-safe JNI layer alongside your compiler's core engine output
           $CLANG_CC -shared -fPIC -O3 -pthread \
             -I./ \
             TessBridge.c tesseract_master.ll \
@@ -61,6 +67,7 @@ jobs:
         run: |
           file libTessSDK.so
           echo "--- Exported Defined Symbols ---"
+          # Using LLVM-NM to verify your core logic methods are cleanly exposed
           llvm-nm -D --defined-only libTessSDK.so
 
       - name: Upload Build Artifacts
