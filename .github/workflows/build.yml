@@ -1,96 +1,26 @@
-name: Tesseract Engine Compiler & Shared Object Build
+# ----------------------------------------------------------------------------
+# 🔐 HARDENED CORE OBFUSCATION & PERFORMANCE TUNING
+# ----------------------------------------------------------------------------
 
-on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
+# Obfuscate all internal classes, methods, and fields into short, scrambled names
+-repackageclasses ''
+-allowaccessmodification
 
-jobs:
-  build-shared-library:
-    runs-on: ubuntu-latest
+# Safe optimization threshold for complex native multi-threaded asynchronous runtimes
+-optimizationpasses 2
 
-    steps:
-      - name: Checkout Codebase
-        uses: actions/checkout@v4
+# ----------------------------------------------------------------------------
+# 🔗 JNI & NATIVE PLATFORM BOUNDARY PRESERVATION
+# ----------------------------------------------------------------------------
 
-      - name: Install LLVM, Clang, and Toolchain Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang llvm
+# FIX: Corrected syntax to explicitly preserve native methods and signature descriptors
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+-includedescriptorclasses
 
-      - name: Compile Tesseract Compiler Executable
-        run: |
-          g++ -std=c++20 -O3 tess_compiler.cpp -o tesseract_compiler
+# Keep all class structures and native mappings inside your UI wrapper namespace
+-keep class com.tesseract.ui.** { *; }
 
-      - name: Run Tesseract Compiler (Symlink Intercept for Android ARM64)
-        run: |
-          # 1. Locate the pre-installed Android NDK on the runner image
-          NDK_PATH="${ANDROID_NDK_LATEST_HOME}"
-          if [ -z "$NDK_PATH" ]; then
-            NDK_PATH="${ANDROID_HOME}/ndk-bundle"
-          fi
-          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
-          ANDROID_CLANG="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
-          
-          # 2. Create a temporary local path bin directory
-          mkdir -p $HOME/bin
-          
-          # 3. 🛠️ SYSTEM INTERCEPT: Create shell wrappers to force system clang to cross-compile for Android
-          echo -e "#!/bin/bash\n$ANDROID_CLANG -target aarch64-linux-android24 \"\$@\"" > $HOME/bin/clang
-          echo -e "#!/bin/bash\n$ANDROID_CLANG++ -target aarch64-linux-android24 \"\$@\"" > $HOME/bin/clang++
-          chmod +x $HOME/bin/clang $HOME/bin/clang++
-          
-          # 4. Prepend our intercept bin to the front of the system execution PATH environment variable
-          export PATH="$HOME/bin:$PATH"
-          
-          # Verify the intercept is active (Should report target: aarch64-linux-android)
-          clang -v
-          
-          # 5. Sweep the workspace to gather all custom spatial modules
-          TARGET_FILES=$(find . -type f \( -name "*.rs" -o -name "*.cpp" -o -name "*.c" -o -name "*.tess" \) \
-            ! -path "*/.**" \
-            ! -name "tess_compiler.cpp" \
-            ! -name "tesseract_compiler" \
-            ! -name "TessBridge.c")
-          
-          echo "🚀 Funneling modules through custom engine compiler toolchain..."
-          ./tesseract_compiler $TARGET_FILES
-
-      - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
-        run: |
-          NDK_PATH="${ANDROID_NDK_LATEST_HOME}"
-          if [ -z "$NDK_PATH" ]; then
-            NDK_PATH="${ANDROID_HOME}/ndk-bundle"
-          fi
-          
-          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
-          CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
-          
-          INCLUDE_FLAGS=$(find . -type d ! -path "*/.**" | sed 's/^/-I /' | tr '\n' ' ')
-          OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o" ! -name "tesseract_compiler")
-          
-          echo "🔨 Final Linking Configuration:"
-          echo "   Objects: $OBJECT_FILES"
-          
-          # Cross-compile your JNI bridge and your newly generated mobile ARM64 object file cleanly
-          $CLANG_CC -shared -fPIC -O3 -pthread \
-            $INCLUDE_FLAGS \
-            TessBridge.c $OBJECT_FILES \
-            -landroid -llog \
-            -o libTessSDK.so
-
-      - name: Verify Exported Library Symbols
-        run: |
-          file libTessSDK.so
-          echo "--- Exported Defined Symbols ---"
-          llvm-nm -D --defined-only libTessSDK.so
-
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: tesseract-engine-binaries
-          path: |
-            libTessSDK.so
-            tess_core.h
-            tesseract_out.o
+# Prevent the compiler from stripping or scrambling vital JVM tracking parameters
+-keepattributes Signature, InnerClasses, EnclosingMethod, AnnotationDefault, *Annotation*
