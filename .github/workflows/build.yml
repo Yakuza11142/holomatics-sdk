@@ -47,15 +47,15 @@ jobs:
           CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" ! -name "TessBridge.c")
           
           echo "🔨 Compiling loose C engine components into mobile object modules..."
-          # FIX: Added '-include tesseract_engine.h' to forcefully supply the correct type mappings
-          # and appended '-Wno-macro-redefined' to keep the log output clean and clear.
+          # FIX: Added '-DTessMatrix4x4=TessMatrix4x4_Bypass' to seamlessly bypass duplicate typedef collisions,
+          # while keeping our master pre-include macro guards and warning suppressions active.
           for file in $CORE_C_FILES; do
-             $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+             $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -DTessMatrix4x4=TessMatrix4x4_Bypass -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
           done
           
           # 5. Compile the JNI bridge file as pure C++ to link accurately with NDK system structures
           echo "🔨 Compiling thread-safe JNI interface layer..."
-          $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -Wno-macro-redefined TessBridge.c -o TessBridge.o
+          $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -DTessMatrix4x4=TessMatrix4x4_Bypass -Wno-macro-redefined TessBridge.c -o TessBridge.o
           
           # 6. Gather all newly generated ARM64 native object files
           OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o")
