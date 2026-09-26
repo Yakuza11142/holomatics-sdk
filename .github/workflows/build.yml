@@ -40,21 +40,21 @@ jobs:
           CLANG_C="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
           CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
           
-          # 3. FIX: Prioritize the local root directory context at the absolute front (-I .)
-          # This guarantees the compiler maps your main headers first instead of nested subsets.
+          # 3. Prioritize the local root directory context at the absolute front (-I .)
           INCLUDE_FLAGS="-I . $(find . -type d ! -path "*/.**" ! -path "." | sed 's/^/-I /' | tr '\n' ' ')"
           
           # 4. Gather all loose native C engine core source modules
           CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" ! -name "TessBridge.c")
           
           echo "🔨 Compiling loose C engine components into mobile object modules..."
+          # FIX: Wrapped the preprocessor definition in explicit quotes to enforce a completely blank string expansion
           for file in $CORE_C_FILES; do
-             $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+             $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
           done
           
           # 5. Compile the JNI bridge file as pure C++ to link accurately with NDK system structures
           echo "🔨 Compiling thread-safe JNI interface layer..."
-          $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS TessBridge.c -o TessBridge.o
+          $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" TessBridge.c -o TessBridge.o
           
           # 6. Gather all newly generated ARM64 native object files
           OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o")
