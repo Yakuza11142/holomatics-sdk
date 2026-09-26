@@ -12,7 +12,14 @@ jobs:
 
     steps:
       - name: Checkout Codebase
-        uses: actions/checkout@v4 # FIX: Corrected from annotations/checkout@v4
+        uses: actions/checkout@v4
+
+      # 🔍 CRITICAL DIAGNOSTIC: Prints exactly where your files reside in the runner workspace
+      - name: Verify Live Source Code File Locations
+        run: |
+          echo "=== ROOT DIRECTORY TREES ==="
+          ls -R
+          echo "============================"
 
       - name: Install LLVM, Clang, and Toolchain Dependencies
         run: |
@@ -25,6 +32,8 @@ jobs:
 
       - name: Run Tesseract Compiler (Process Source Directories)
         run: |
+          # NOTE: Review the "Verify Live Source Code File Locations" log output above. 
+          # If your files are deeper (e.g., app/src/main/cpp/), update these arguments to match.
           ./tesseract_compiler src/ app/ library/
 
       - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
@@ -41,7 +50,7 @@ jobs:
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
           
-          # 3. Execute the hardened compilation with native NDK system files mapped inside scope
+          # 3. Execute cross-compilation linking your bridge and your compiler's output
           $CLANG_CC -shared -fPIC -O3 -pthread \
             -I./ \
             TessBridge.c tesseract_master.ll \
