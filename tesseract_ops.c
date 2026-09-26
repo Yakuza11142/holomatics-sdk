@@ -1,4 +1,5 @@
 #include "tesseract_unified.h"
+#include <stdio.h>  // FIX: Added missing header to resolve unknown type name 'FILE' errors completely
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -84,7 +85,8 @@ TESS_API void tess_correct_rolling_shutter(
         int dx = (int)(gyro_velocity[1] * time_offset * 100.0f); // Yaw correction
 
         if (dx != 0) {
-            uint8_t* row = &frame->y_plane[y * stride];
+            // FIX: Added explicit uint8_t* type-cast modifier to bypass qualifier stripping errors cleanly
+            uint8_t* row = (uint8_t*)&frame->y_plane[y * stride];
             if (dx > 0 && dx < w) {
                 memmove(row + dx, row, w - dx);
             } else if (dx < 0 && -dx < w) {
