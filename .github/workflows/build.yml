@@ -30,7 +30,7 @@ jobs:
         run: |
           g++ -std=c++20 -O3 tess_compiler.cpp -o tesseract_compiler
 
-      - name: Run Tesseract Compiler (Symlink Intercept for Android ARM64)
+      - name: Run Tesseract Compiler (Force-Target Android ARM64)
         run: |
           # 1. Locate the pre-installed Android NDK on the runner image
           NDK_PATH="${ANDROID_NDK_LATEST_HOME}"
@@ -43,26 +43,18 @@ jobs:
           # 2. Create a temporary local path bin directory
           mkdir -p $HOME/bin
           
-          # 3. 🛠️ SYSTEM INTERCEPT WRAPPERS: Forces host clang to cross-compile for Android
+          # 3. 🛠️ SYSTEM INTERCEPT PROXY WRAPPERS: Forces host clang calls to compile for mobile hardware targets
           echo -e "#!/bin/bash\n$ANDROID_CLANG -target aarch64-linux-android24 \"\$@\"" > $HOME/bin/clang
           echo -e "#!/bin/bash\n$TOOLCHAIN/bin/aarch64-linux-android24-clang++ -target aarch64-linux-android24 \"\$@\"" > $HOME/bin/clang++
           chmod +x $HOME/bin/clang $HOME/bin/clang++
-          
-          # 4. Prepend our intercept bin to the front of the system execution PATH environment variable
           export PATH="$HOME/bin:$PATH"
           
-          # Verify the intercept target is active (Should report: Target: aarch64-unknown-linux-android24)
+          # Verify the path proxy target is active (Should report: Target: aarch64-unknown-linux-android24)
           clang -v
           
-          # 5. Sweep the workspace dynamically to gather all custom spatial modules
-          TARGET_FILES=$(find . -type f \( -name "*.rs" -o -name "*.cpp" -o -name "*.c" -o -name "*.tess" \) \
-            ! -path "*/.**" \
-            ! -name "tess_compiler.cpp" \
-            ! -name "tesseract_compiler" \
-            ! -name "TessBridge.c")
-          
-          echo "🚀 Funneling modules through custom engine compiler toolchain:"
-          ./tesseract_compiler $TARGET_FILES
+          # 4. 🚀 TARGET INITIALIZATION: Pass ONLY your root entry engine file layout.
+          # Your custom DependencyResolver will automatically trace and pull in your remaining modules!
+          ./tesseract_compiler tesseract_ui.rs --target aarch64-linux-android24 --emit-obj -o tesseract_out
 
       - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
         run: |
@@ -78,10 +70,9 @@ jobs:
           INCLUDE_FLAGS=$(find . -type d ! -path "*/.**" | sed 's/^/-I /' | tr '\n' ' ')
           OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o" ! -name "tesseract_compiler")
           
-          echo "🔨 Final Linking Configuration:"
-          echo "   Objects: $OBJECT_FILES"
+          echo "🔨 Packaging final engine library with targets: $OBJECT_FILES"
           
-          # Cross-compile your thread-safe JNI bridge and your newly generated mobile ARM64 object file cleanly
+          # Cross-compile your thread-safe JNI bridge, compiler object output, and loose C cores together
           $CLANG_CC -shared -fPIC -O3 -pthread \
             $INCLUDE_FLAGS \
             TessBridge.c $OBJECT_FILES \
