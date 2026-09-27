@@ -1,20 +1,26 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("TessSDK")
 
-# Optimization flags for Release builds
+# Optimization flags for Release builds across all devices
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -fdata-sections -ffunction-sections -flto")
 set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3 -fdata-sections -ffunction-sections -flto")
-# NOTE: Removed '-fvisibility=hidden' and '-Wl,-s' to guarantee JNI exports stay visible
-set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} -Wl,--gc-sections")
+set(CMAKE_SHARED_LINKER_FLAGS_RELEASE "${CMAKE_SHARED_LINKER_FLAGS_RELEASE} -Wl,--gc-sections -flto")
 
-# Rename the target from 'tessnative' to 'TessSDK' so System.loadLibrary("TessSDK") succeeds
+# AUTOMATICALLY MAP ALL FILES:
+# This scans the current directory and collects every .c and .cpp file into a variable called 'TESS_SOURCES'
+file(GLOB TESS_SOURCES 
+     "${CMAKE_CURRENT_SOURCE_DIR}/*.c" 
+     "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp"
+)
+
+# Compile the library using the automatically generated file list
 add_library(
     TessSDK
     SHARED
-    TessBridge.c # Or tess_bridge.cpp depending on your primary bridge choice
+    ${TESS_SOURCES}
 )
 
-# Tell the compiler where your header files (like tess_core.h) are located
+# Tell the compiler where your header files are located
 target_include_directories(
     TessSDK PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
