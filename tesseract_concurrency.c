@@ -5,6 +5,14 @@
 #include <string.h>
 #include "tesseract_engine.h"
 
+// TessMatrix4x4 comes from tesseract_engine.h. 
+// Define TessRenderCommand here since it is specific to the MPMC queue engine.
+typedef struct {
+    uint32_t command_id;
+    float delta_time;
+    TessMatrix4x4 payload_matrix;
+} TessRenderCommand;
+
 // Must be a power of 2 for fast bitwise masking operations
 #define RING_BUFFER_SIZE 256
 #define RING_BUFFER_MASK (RING_BUFFER_SIZE - 1)
