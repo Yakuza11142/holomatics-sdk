@@ -1,58 +1,105 @@
-#include "tesseract_pro.h"
-#include <math.h>
+struct TessCameraIntrinsics {
+    fx: f32,
+    fy: f32,
+    cx: f32,
+    cy: f32,
+}
 
-TESS_API int32_t tess_estimate_lighting(
-    const TessCameraFrame* frame, 
-    float* out_ambient_intensity, 
-    float out_light_dir[3], 
-    float* out_color_temp_kelvin
+struct PipelineUniforms {
+    width: u32,
+    height: u32,
+    stride: u32,
+    _pad: u32,
+}
+
+struct LightingOutput {
+    ambient_intensity: f32,
+    color_temp_kelvin: f32,
+    light_dir: vec3<f32>,
+}
+
+@group(0) @binding(0) var<uniform> cfg: PipelineUniforms;
+@group(0) @binding(1) var<storage, read> y_plane_buffer: array<u32>; // Packed 4 pixels per u32 (8-bit per channel)
+@group(0) @binding(2) var<storage, read_write> output_data: LightingOutput;
+
+// Shared workgroup memory acting as low-latency register accumulators across local execution lanes
+var<workgroup> s_lum: array<f32, 256>;
+var<workgroup> s_cx: array<f32, 256>;
+var<workgroup> s_cy: array<f32, 256>;
+
+@compute @workgroup_size(16, 16, 1)
+fn main(
+    @builtin(local_invocation_index) local_idx: u32,
+    @builtin(global_invocation_id) global_id: vec3<u32>
 ) {
-    if (!frame || !frame->y_plane || !out_ambient_intensity || !out_light_dir || !out_color_temp_kelvin) return -1;
+    let x = global_id.x;
+    let y = global_id.y;
 
-    int w = frame->width;
-    int h = frame->height;
-    int stride = frame->stride;
-    const uint8_t* img = frame->y_plane;
+    var pixel_luminosity: f32 = 0.0;
+    var local_cx: f32 = 0.0;
+    var local_cy: f32 = 0.0;
 
-    uint64_t total_lum = 0;
-    int grid_x = 10, grid_y = 10;
-    int step_x = w / grid_x;
-    int step_y = h / grid_y;
+    // Hardened Structural Guard: Discard execution tracks overshooting the camera boundaries
+    if (x < cfg.width && y < cfg.height) {
+        let pixel_idx = y * cfg.stride + x;
+        let word_idx = pixel_idx / 4u;
+        let shift_bits = (pixel_idx % 4u) * 8u;
 
-    float centroid_x = 0.0f, centroid_y = 0.0f;
-    float total_weight = 0.0f;
+        // Unpack an individual 8-bit luma channel from the 32-bit packed storage block
+        let packed_word = y_plane_buffer[word_idx];
+        let val_u8 = (packed_word >> shift_bits) & 0xFFu;
+        
+        pixel_luminosity = f32(val_u8);
+        let weight = pixel_luminosity / 255.0;
 
-    for (int y = 0; y < h; y += step_y) {
-        for (int x = 0; x < w; x += step_x) {
-            uint8_t val = img[y * stride + x];
-            total_lum += val;
+        local_cx = f32(x) * weight;
+        local_cy = f32(y) * weight;
+    }
 
-            float weight = (float)val / 255.0f;
-            centroid_x += (float)x * weight;
-            centroid_y += (float)y * weight;
-            total_weight += weight;
+    // Cache the intermediate pixel outputs straight into localized workgroup shared structures
+    s_lum[local_idx] = pixel_luminosity;
+    s_cx[local_idx]  = local_cx;
+    s_cy[local_idx]  = local_cy;
+    workgroupBarrier();
+
+    // High-Speed Tree Reduction Step executing directly inside low-latency registers
+    for (var stride: u32 = 128u; stride > 0u; stride >>= 1u) {
+        if (local_idx < stride) {
+            s_lum[local_idx] += s_lum[local_idx + stride];
+            s_cx[local_idx]  += s_cx[local_idx + stride];
+            s_cy[local_idx]  += s_cy[local_idx + stride];
+        }
+        workgroupBarrier();
+    }
+
+    // Thread Leader processes the block results and applies the global normalization math
+    if (local_idx == 0u) {
+        let total_samples = f32(cfg.width * cfg.height);
+        
+        if (total_samples > 0.0) {
+            let global_lum = s_lum[0];
+            let total_weight = (global_lum / 255.0);
+            
+            output_data.ambient_intensity = global_lum / (total_samples * 255.0);
+            output_data.color_temp_kelvin = 6500.0 * (output_data.ambient_intensity + 0.5);
+
+            if (total_weight > 0.0) {
+                let mean_cx = s_cx[0] / total_weight;
+                let mean_cy = s_cy[0] / total_weight;
+
+                let norm_x = (mean_cx - (f32(cfg.width) * 0.5)) / (f32(cfg.width) * 0.5);
+                let norm_y = (mean_cy - (f32(cfg.height) * 0.5)) / (f32(cfg.height) * 0.5);
+                let radial_sq = min(1.0, (norm_x * norm_x) + (norm_y * norm_y));
+
+                var dir = vec3<f32>(norm_x, -norm_y, 1.0 - sqrt(radial_sq));
+                let len = length(dir);
+                if (len > 0.0001) {
+                    dir = normalize(dir);
+                }
+                output_data.light_dir = dir;
+            } else {
+                output_data.light_dir = vec3<f32>(0.0, 1.0, 0.0);
+            }
         }
     }
-
-    // 1. Ambient Intensity Normalized (0.0 to 1.0)
-    *out_ambient_intensity = (float)total_lum / (float)(grid_x * grid_y * 255);
-
-    // 2. Estimated Directional Light Vector
-    if (total_weight > 0.0f) {
-        centroid_x /= total_weight;
-        centroid_y /= total_weight;
-
-        float norm_x = (centroid_x - (w * 0.5f)) / (w * 0.5f);
-        float norm_y = (centroid_y - (h * 0.5f)) / (h * 0.5f);
-
-        out_light_dir[0] = norm_x;
-        out_light_dir[1] = -norm_y; // Invert for spatial coordinate system
-        out_light_dir[2] = 1.0f - sqrtf(norm_x * norm_x + norm_y * norm_y);
-    } else {
-        out_light_dir[0] = 0.0f; out_light_dir[1] = 1.0f; out_light_dir[2] = 0.0f;
-    }
-
-    // 3. Estimated Color Temperature (Standard baseline approximation)
-    *out_color_temp_kelvin = 6500.0f * (*out_ambient_intensity + 0.5f);
-    return 0;
 }
