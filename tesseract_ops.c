@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <stdalign.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -42,15 +43,15 @@ typedef struct {
 } TessCameraFrame;
 
 // Cache alignment isolation blocks core-to-core false sharing
-typedef struct alignas(64) {
-    TessCommand command;
+typedef struct {
+    _Alignas(64) TessCommand command;
 } TessQueueSlot;
 
 /// Thread-Safe Lock-Free Single-Producer Single-Consumer Queue Engine (C11 Atomic)
 typedef struct {
     TessQueueSlot buffer[RING_BUFFER_SIZE];
-    alignas(64) atomic_uint head;
-    alignas(64) atomic_uint tail;
+    _Alignas(64) atomic_uint head;
+    _Alignas(64) atomic_uint tail;
 } TessLockFreeQueue;
 
 // ============================================================================
@@ -153,7 +154,6 @@ bool tess_map_export(TessMapHeader* header, const TessNode* root_node, const cha
     header->version = 1;
     header->node_count = 0;
 
-    // Simple BFS queue stack for node traversal
     const TessNode* queue[MAX_SERIALIZED_NODES];
     size_t q_head = 0;
     size_t q_tail = 0;
