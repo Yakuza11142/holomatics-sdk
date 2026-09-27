@@ -3,20 +3,11 @@
 #include <stdatomic.h>
 #include <stdalign.h>
 #include <string.h>
+#include "tesseract_engine.h"
 
 // Must be a power of 2 for fast bitwise masking operations
 #define RING_BUFFER_SIZE 256
 #define RING_BUFFER_MASK (RING_BUFFER_SIZE - 1)
-
-typedef struct {
-    float m[16];
-} TessMatrix4x4;
-
-typedef struct {
-    uint32_t command_id;
-    float delta_time;
-    TessMatrix4x4 payload_matrix;
-} TessRenderCommand;
 
 // Hardware Cache Isolation: Pad each element slot to 64 bytes 
 // to prevent CPU core cache-line bouncing (False Sharing)
