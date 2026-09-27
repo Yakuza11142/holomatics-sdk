@@ -1,26 +1,38 @@
 # ----------------------------------------------------------------------------
-# 🔐 HARDENED CORE OBFUSCATION & PERFORMANCE TUNING
+# 🔐 AGGRESSIVE CORE OBFUSCATION & MAXIMUM SHRINKING
 # ----------------------------------------------------------------------------
 
-# Obfuscate all internal classes, methods, and fields into short, scrambled names
+# Repackage all classes into a single root package for maximum obfuscation
 -repackageclasses ''
 -allowaccessmodification
 
-# Safe optimization threshold for complex native multi-threaded asynchronous runtimes
--optimizationpasses 2
+# Increase optimization depth for deeper dead-code elimination
+-optimizationpasses 5
+
+# Strip out verbose debug and verbose logging calls completely from release bytecode
+-assumenosideeffects class android.util.Log {
+    public static boolean isLoggable(java.lang.String, int);
+    public static int v(...);
+    public static int d(...);
+}
 
 # ----------------------------------------------------------------------------
-# 🔗 JNI & NATIVE PLATFORM BOUNDARY PRESERVATION
+# 🔗 TARGETED NATIVE JNI BOUNDARY PRESERVATION
 # ----------------------------------------------------------------------------
 
-# FIX: Corrected syntax to explicitly preserve native methods and signature descriptors
--keepclasseswithmembernames class * {
+# FIX: Scope native checks strictly to your namespace instead of scanning every third-party jar/aar
+-keepclasseswithmembernames class com.tesseract.** {
     native <methods>;
 }
 -includedescriptorclasses
 
-# Keep all class structures and native mappings inside your UI wrapper namespace
--keep class com.tesseract.ui.** { *; }
+# Tighten UI preservation: Keep class definitions and constructors for layout inflation, 
+# but allow ProGuard to strip unused private fields and internal helper methods.
+-keep public class com.tesseract.ui.** {
+    <init>(...);
+    public void set*(...);
+    public *** get*();
+}
 
-# Prevent the compiler from stripping or scrambling vital JVM tracking parameters
--keepattributes Signature, InnerClasses, EnclosingMethod, AnnotationDefault, *Annotation*
+# Trim non-essential attributes (removed broad wildcard annotations to save space)
+-keepattributes Signature, InnerClasses, EnclosingMethod, AnnotationDefault
