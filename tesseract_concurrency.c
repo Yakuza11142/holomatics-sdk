@@ -1,133 +1,129 @@
-`timescale 1ns / 1ps
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::cell::UnsafeCell;
 
-/**
- * ============================================================================
- * TIER 1: HARDWARE SILICON BLOCK (SYNTHESIZABLE SYSTEMVERILOG CORES)
- * ============================================================================
- * Implements a pure hardware-level, zero-latency MPMC FIFO queue layout with 
- * built-in instantaneous combinatorial backpressure logic.
- */
-module tesseract_hardware_queue #(
-    parameter DATA_WIDTH = 256,     // Structural bit-width matching your TessRenderCommand footprint
-    parameter ADDR_WIDTH = 7        // 2^7 = 128 depth buffer slots matching your initial specification
-)(
-    input  wire                   clk,          // Physical hardware clock line
-    input  wire                   rst_n,        // Asynchronous low-active hardware system reset
-    
-    // Producer Interface (e.g., Camera / Sensor direct wire link)
-    input  wire [DATA_WIDTH-1:0]  wdata,        // Parallel data input bus
-    input  wire                   w_en,         // Write-enable flag wire signal
-    output wire                   queue_full,   // Instant hardware-level backpressure full flag
-    
-    // Consumer Interface (e.g., Render Processor core block link)
-    output reg  [DATA_WIDTH-1:0]  rdata,        // Parallel data output bus
-    input  wire                   r_en,         // Read-enable flag wire signal
-    output wire                   queue_empty   // Instant hardware-level empty flag
-);
+// Must be a power of 2 for fast bitwise masking operations
+const RING_BUFFER_SIZE: usize = 256;
+const RING_BUFFER_MASK: usize = RING_BUFFER_SIZE - 1;
 
-    // Local registers acting as on-chip physical flip-flop storage arrays
-    reg [DATA_WIDTH-1:0] storage_matrix [0:(1<<ADDR_WIDTH)-1];
-    reg [ADDR_WIDTH:0]   head_pointer; // Includes an extra MSB to track loop wrap-around status
-    reg [ADDR_WIDTH:0]   tail_pointer;
-
-    // Combinatorial hardware logic assigning status flags instantaneously based on tracking bits
-    assign queue_empty = (head_pointer == tail_pointer);
-    assign queue_full  = (head_pointer[ADDR_WIDTH-1:0] == tail_pointer[ADDR_WIDTH-1:0]) && 
-                         (head_pointer[ADDR_WIDTH] != tail_pointer[ADDR_WIDTH]);
-
-    // Single-cycle sequential logic execution block triggered on the physical clock edge
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            // Instant system reset state configuration
-            head_pointer <= {(ADDR_WIDTH+1){1'b0}};
-            tail_pointer <= {(ADDR_WIDTH+1){1'b0}};
-            rdata        <= {DATA_WIDTH{1'b0}};
-        end else begin
-            // Lock-Free Hardware Enqueue Sequence (Executes in exactly 1 clock cycle)
-            if (w_en && !queue_full) begin
-                storage_matrix[tail_pointer[ADDR_WIDTH-1:0]] <= wdata;
-                tail_pointer <= tail_pointer + 1'b1;
-            end
-            
-            // Lock-Free Hardware Dequeue Sequence (Executes in exactly 1 clock cycle)
-            if (r_en && !queue_empty) begin
-                rdata        <= storage_matrix[head_pointer[ADDR_WIDTH-1:0]];
-                head_pointer <= head_pointer + 1'b1;
-            end
-        end
-    end
-
-endmodule
-
-/*
- ============================================================================
-  TIER 2: HARDWARE-AGNOSTIC GPU COMPUTE SHADER BLOCK (WEBGPU / WGSL MODULE)
- ============================================================================
-  This section contains the code meant for compilation by WebGPU drivers to execute
-  parallel work queue pushes natively across any modern graphics card processor.
-  It is commented out below so it does not conflict with your Verilog synthesis engine.
-
-struct TessMatrix4x4 {
-    m: array<f32, 16>,
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TessMatrix4x4 {
+    pub m: [f32; 16],
 }
 
-struct TessRenderCommand {
-    command_id: u32,
-    delta_time: f32,
-    _pad0: u32, // Guarantee strict 64-bit layout alignment boundaries across vendors
-    _pad1: u32,
-    payload_matrix: TessMatrix4x4,
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TessRenderCommand {
+    pub command_id: u32,
+    pub delta_time: f32,
+    pub payload_matrix: TessMatrix4x4,
 }
 
-struct QueueControlBlock {
-    head: atomic<u32>,
-    tail: atomic<u32>,
-    capacity: u32,
-    mask: u32,
+// Hardware Cache Isolation: Pad each element slot to 64 bytes 
+// to prevent CPU core cache-line bouncing (False Sharing)
+#[repr(align(64))]
+struct TessQueueSlot {
+    command: UnsafeCell<TessRenderCommand>,
+    sequence: AtomicU32,
 }
 
-// Global Memory Resource Bindings (Universal Across All Silicon Vendors)
-@group(0) @binding(0) var<storage, read_write> queue_ctrl: QueueControlBlock;
-@group(0) @binding(1) var<storage, read_write> command_buffer: array<TessRenderCommand>;
+/// Apex Multi-Producer Multi-Consumer (MPMC) Bounded Lock-Free Ring Buffer Engine.
+/// Fully safe to pass and share across asynchronous threads or Tokio/Rayon thread pools.
+pub struct TessAdvancedMPMCQueue {
+    buffer: Box<[TessQueueSlot; RING_BUFFER_SIZE]>,
+    enqueue_pos: CachePaddedAtomic,
+    dequeue_pos: CachePaddedAtomic,
+}
 
-// Configure workgroup size for global cross-vendor execution safety
-@compute @workgroup_size(64, 1, 1)
-fn queue_push_kernel(
-    @builtin(global_invocation_id) global_id: vec3<u32>,
-    @builtin(num_workgroups) num_groups: vec3<u32>,
-    @builtin(workgroup_size) wg_size: vec3<u32>
-) {
-    let thread_idx = global_id.x;
+#[repr(align(64))]
+struct CachePaddedAtomic {
+    value: AtomicU32,
+}
 
-    // Create a robust local command payload structure mapping your pipeline properties
-    var cmd: TessRenderCommand;
-    cmd.command_id = thread_idx;
-    cmd.delta_time = 0.0166667; 
-    
-    // Explicitly initialize the fixed array inside the internal transform matrix
-    for (var i = 0u; i < 16u; i = i + 1u) {
-        cmd.payload_matrix.m[i] = 0.0;
+unsafe impl Send for TessAdvancedMPMCQueue {}
+unsafe impl Sync for TessAdvancedMPMCQueue {}
+
+impl TessAdvancedMPMCQueue {
+    /// Instantiates and initializes the ticket-based queue slots.
+    pub fn new() -> Self {
+        // Create an uninitialized array layout securely
+        let mut slots = Vec::with_capacity(RING_BUFFER_SIZE);
+        for i in 0..RING_BUFFER_SIZE {
+            slots.push(TessQueueSlot {
+                command: UnsafeCell::new(TessRenderCommand {
+                    command_id: 0,
+                    delta_time: 0.0,
+                    payload_matrix: TessMatrix4x4 { m: [0.0; 16] },
+                }),
+                sequence: AtomicU32::new(i as u32),
+            });
+        }
+        
+        let boxed_buffer: Box<[TessQueueSlot; RING_BUFFER_SIZE]> = match slots.into_boxed_slice().try_into() {
+            Ok(b) => b,
+            Err(_) => unreachable!(),
+        };
+
+        Self {
+            buffer: boxed_buffer,
+            enqueue_pos: CachePaddedAtomic { value: AtomicU32::new(0) },
+            dequeue_pos: CachePaddedAtomic { value: AtomicU32::new(0) },
+        }
     }
-    cmd.payload_matrix.m[0]  = 1.0; // Initialize base identity parameters
-    cmd.payload_matrix.m[5]  = 1.0;
-    cmd.payload_matrix.m[10] = 1.0;
-    cmd.payload_matrix.m[15] = 1.0;
 
-    // --- SECURE NATIVE HARDWARE ATOMIC TICKET CLAIM ---
-    // Atomic fetch-and-add claims an exact ring placement buffer slot instantly
-    let current_tail = atomicAdd(&queue_ctrl.tail, 1u);
-    let slot_index = current_tail & queue_ctrl.mask;
+    /// Thread-Safe Lock-Free Enqueue operation.
+    /// Allows hundreds of threads to push commands concurrently with zero mutex lock-outs.
+    pub fn push(&self, cmd: TessRenderCommand) -> Result<(), &'static str> {
+        let mut pos = self.enqueue_pos.value.load(Ordering::Relaxed);
 
-    // Verify queue bounds by loading the consumer's current head pointer position
-    let current_head = atomicLoad(&queue_ctrl.head);
-    let queue_occupancy = current_tail - current_head;
+        loop {
+            let slot = &self.buffer[(pos as usize) & RING_BUFFER_MASK];
+            let seq = slot.sequence.load(Ordering::Acquire);
+            let diff = (seq as i32) - (pos as i32);
 
-    if (queue_occupancy < queue_ctrl.capacity) {
-        // Exclusively write the data payload directly into VRAM allocation structures
-        command_buffer[slot_index] = cmd;
-    } else {
-        // Queue is entirely saturated; roll back the allocation atomically
-        atomicSub(&queue_ctrl.tail, 1u);
+            if diff == 0 {
+                if self.enqueue_pos.value.compare_exchange_weak(
+                    pos, pos + 1, 
+                    Ordering::Relaxed, Ordering::Relaxed
+                ).is_ok() {
+                    // Safe write: We uniquely claimed this ticket location
+                    unsafe { *slot.command.get() = cmd; }
+                    slot.sequence.store(pos + 1, Ordering::Release);
+                    return Ok(());
+                }
+            } else if diff < 0 {
+                return Err("QueueIsFull");
+            } else {
+                pos = self.enqueue_pos.value.load(Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// Thread-Safe Lock-Free Dequeue operation.
+    /// Safely hands off workload commands to whichever worker core is free first.
+    pub fn pop(&self) -> Option<TessRenderCommand> {
+        let mut pos = self.dequeue_pos.value.load(Ordering::Relaxed);
+
+        loop {
+            let slot = &self.buffer[(pos as usize) & RING_BUFFER_MASK];
+            let seq = slot.sequence.load(Ordering::Acquire);
+            let diff = (seq as i32) - ((pos + 1) as i32);
+
+            if diff == 0 {
+                if self.dequeue_pos.value.compare_exchange_weak(
+                    pos, pos + 1, 
+                    Ordering::Relaxed, Ordering::Relaxed
+                ).is_ok() {
+                    // Safe read: We uniquely claimed this data slot ticket
+                    let cmd = unsafe { *slot.command.get() };
+                    slot.sequence.store(pos + (RING_BUFFER_SIZE as u32) + 1, Ordering::Release);
+                    return Some(cmd);
+                }
+            } else if diff < 0 {
+                return None; // Queue is completely empty
+            } else {
+                pos = self.dequeue_pos.value.load(Ordering::Relaxed);
+            }
+        }
     }
 }
-*/
