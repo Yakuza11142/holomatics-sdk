@@ -131,7 +131,7 @@ static void* worker_routine(void* arg) {
             float total_weight = final_lum / 255.0f;
 
             output_data->ambient_intensity = final_lum / (total_samples * 255.0f);
-            output_data->color_temp_kelvin = 6500.0f * (output_data.ambient_intensity + 0.5f);
+            output_data->color_temp_kelvin = 6500.0f * (output_data->ambient_intensity + 0.5f); // Fixed pointer access ->
 
             if (total_weight > 0.0f) {
                 float mean_cx = final_cx / total_weight;
