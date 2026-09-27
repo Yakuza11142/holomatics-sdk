@@ -1,38 +1,28 @@
-# ----------------------------------------------------------------------------
-# 🔐 AGGRESSIVE CORE OBFUSCATION & MAXIMUM SHRINKING
-# ----------------------------------------------------------------------------
+# ====================================================================
+# TessSDK Spatial Engine - Production ProGuard Rules
+# ====================================================================
 
-# Repackage all classes into a single root package for maximum obfuscation
--repackageclasses ''
--allowaccessmodification
-
-# Increase optimization depth for deeper dead-code elimination
--optimizationpasses 5
-
-# Strip out verbose debug and verbose logging calls completely from release bytecode
--assumenosideeffects class android.util.Log {
-    public static boolean isLoggable(java.lang.String, int);
-    public static int v(...);
-    public static int d(...);
-}
-
-# ----------------------------------------------------------------------------
-# 🔗 TARGETED NATIVE JNI BOUNDARY PRESERVATION
-# ----------------------------------------------------------------------------
-
-# FIX: Scope native checks strictly to your namespace instead of scanning every third-party jar/aar
--keepclasseswithmembernames class com.tesseract.** {
+# 1. Protect Java-to-C Bridge Interfaces
+# Forces ProGuard to preserve the exact package path and method names
+# for native implementations inside your SDK namespace.
+-keepclassmembers class com.holomatics.sdk.** {
     native <methods>;
 }
--includedescriptorclasses
 
-# Tighten UI preservation: Keep class definitions and constructors for layout inflation, 
-# but allow ProGuard to strip unused private fields and internal helper methods.
--keep public class com.tesseract.ui.** {
-    <init>(...);
-    public void set*(...);
-    public *** get*();
+# 2. Prevent Universal Obfuscation of Native Entry Points
+# Ensures any class declaring a native method keeps its name intact,
+# preventing runtime 'java.lang.UnsatisfiedLinkError' crashes.
+-keepclasseswithmembernames class * {
+    native <methods>;
 }
 
-# Trim non-essential attributes (removed broad wildcard annotations to save space)
--keepattributes Signature, InnerClasses, EnclosingMethod, AnnotationDefault
+# 3. Suppress Warnings From Core Lint and AAPT2 Dependencies
+# Prevents build compilation failures caused by non-critical warning flags
+# in the standard build toolchain.
+-dontwarn com.android.tools.lint.**
+-dontwarn com.android.tools.build.**
+
+# 4. Maximize Optimization Passes
+# Allows the optimizer to run aggressively multiple times to shrink 
+# your background Java framework wrappers down as small as possible.
+-optimizationpasses 5
