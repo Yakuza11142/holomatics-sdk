@@ -3,7 +3,13 @@
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
+
+#if defined(_WIN32) || defined(_WIN64)
+#include <windows.h>
+#else
 #include <pthread.h>
+#include <unistd.h>
+#endif
 
 struct TessCameraIntrinsics {
     float fx;
@@ -29,175 +35,285 @@ struct LightingOutput {
     struct Vector3 light_dir;
 };
 
-// Isolated workgroup result container to prevent cross-thread interference
 struct WorkgroupResult {
     float lum;
     float cx;
     float cy;
 };
 
-struct ThreadArg {
-    uint32_t gx;
-    uint32_t gy;
+struct PoolContext {
     struct PipelineUniforms cfg;
     const uint32_t* y_plane_buffer;
     size_t y_plane_size;
-    struct WorkgroupResult* result_slot;
+    uint32_t num_groups_x;
+    uint32_t num_groups_y;
+    uint32_t total_groups;
+    uint32_t next_group_idx;
+    struct WorkgroupResult* results;
+
+#if defined(_WIN32) || defined(_WIN64)
+    CRITICAL_SECTION mutex;
+#else
+    pthread_mutex_t mutex;
+#endif
 };
 
-static void* worker_routine(void* arg) {
-    if (!arg) return NULL;
-    struct ThreadArg* targs = (struct ThreadArg*)arg;
-    uint32_t gx = targs->gx;
-    uint32_t gy = targs->gy;
-    struct PipelineUniforms cfg = targs->cfg;
-    const uint32_t* y_plane_buffer = targs->y_plane_buffer;
-    size_t y_plane_size = targs->y_plane_size;
-    struct WorkgroupResult* result_slot = targs->result_slot;
+static long get_processor_count(void) {
+#if defined(_WIN32) || defined(_WIN64)
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    return (long)sysinfo.dwNumberOfProcessors;
+#elif defined(_SC_NPROCESSORS_ONLN)
+    long count = sysconf(_SC_NPROCESSORS_ONLN);
+    return (count > 0) ? count : 4;
+#else
+    return 4;
+#endif
+}
 
+static uint32_t fetch_and_increment_group(struct PoolContext* ctx) {
+    uint32_t val;
+#if defined(_WIN32) || defined(_WIN64)
+    EnterCriticalSection(&ctx->mutex);
+    val = ctx->next_group_idx;
+    ctx->next_group_idx++;
+    LeaveCriticalSection(&ctx->mutex);
+#else
+    pthread_mutex_lock(&ctx->mutex);
+    val = ctx->next_group_idx;
+    ctx->next_group_idx++;
+    pthread_mutex_unlock(&ctx->mutex);
+#endif
+    return val;
+}
+
+static void execute_worker_workload(struct PoolContext* ctx) {
     const uint32_t WG_SIZE_X = 16;
     const uint32_t WG_SIZE_Y = 16;
-    const uint32_t LOCAL_SIZE = WG_SIZE_X * WG_SIZE_Y; // 256
+    const uint32_t LOCAL_SIZE = WG_SIZE_X * WG_SIZE_Y;
+    
+    uint32_t group_idx;
+    uint32_t gx;
+    uint32_t gy;
+    float s_lum[256];
+    float s_cx[256];
+    float s_cy[256];
+    uint32_t local_idx;
+    uint32_t stride;
 
-    float s_lum[256] = {0.0f};
-    float s_cx[256] = {0.0f};
-    float s_cy[256] = {0.0f};
+    for (local_idx = 0; local_idx < 256; ++local_idx) {
+        s_lum[local_idx] = 0.0f;
+        s_cx[local_idx] = 0.0f;
+        s_cy[local_idx] = 0.0f;
+    }
 
-    // Phase 1: Load and compute local thread data across the 16x16 block with strict bounds guarding
-    for (uint32_t local_idx = 0; local_idx < LOCAL_SIZE; ++local_idx) {
-        uint32_t local_x = local_idx % WG_SIZE_X;
-        uint32_t local_y = local_idx / WG_SIZE_X;
+    while (true) {
+        group_idx = fetch_and_increment_group(ctx);
+        if (group_idx >= ctx->total_groups) {
+            break;
+        }
 
-        uint32_t x = gx * WG_SIZE_X + local_x;
-        uint32_t y = gy * WG_SIZE_Y + local_y;
+        gx = group_idx % ctx->num_groups_x;
+        gy = group_idx / ctx->num_groups_x;
 
-        float pixel_luminosity = 0.0f;
-        float local_cx = 0.0f;
-        float local_cy = 0.0f;
+        for (local_idx = 0; local_idx < LOCAL_SIZE; ++local_idx) {
+            uint32_t local_x = local_idx % WG_SIZE_X;
+            uint32_t local_y = local_idx / WG_SIZE_X;
+            uint32_t x = gx * WG_SIZE_X + local_x;
+            uint32_t y = gy * WG_SIZE_Y + local_y;
 
-        if (x < cfg.width && y < cfg.height && y_plane_buffer) {
-            size_t pixel_idx = (size_t)y * cfg.stride + x;
-            size_t word_idx = pixel_idx / 4;
+            float pixel_luminosity = 0.0f;
+            float local_cx_val = 0.0f;
+            float local_cy_val = 0.0f;
 
-            if (word_idx < y_plane_size) {
-                uint32_t shift_bits = (pixel_idx % 4) * 8;
-                uint32_t packed_word = y_plane_buffer[word_idx];
-                uint32_t val_u8 = (packed_word >> shift_bits) & 0xFFu;
+            if (x < ctx->cfg.width && y < ctx->cfg.height && ctx->y_plane_buffer) {
+                size_t pixel_idx = (size_t)y * (size_t)ctx->cfg.stride + (size_t)x;
+                size_t word_idx = pixel_idx / 4;
 
-                pixel_luminosity = (float)val_u8;
-                float weight = pixel_luminosity / 255.0f;
+                if (word_idx < ctx->y_plane_size) {
+                    uint32_t shift_bits = (uint32_t)((pixel_idx % 4) * 8);
+                    uint32_t packed_word = ctx->y_plane_buffer[word_idx];
+                    uint32_t val_u8 = (packed_word >> shift_bits) & 0xFFu;
 
-                local_cx = (float)x * weight;
-                local_cy = (float)y * weight;
+                    pixel_luminosity = (float)val_u8;
+                    {
+                        float weight = pixel_luminosity / 255.0f;
+                        local_cx_val = (float)x * weight;
+                        local_cy_val = (float)y * weight;
+                    }
+                }
+            }
+
+            s_lum[local_idx] = pixel_luminosity;
+            s_cx[local_idx]  = local_cx_val;
+            s_cy[local_idx]  = local_cy_val;
+        }
+
+        for (stride = 128u; stride > 0u; stride >>= 1u) {
+            for (local_idx = 0; local_idx < stride; ++local_idx) {
+                s_lum[local_idx] += s_lum[local_idx + stride];
+                s_cx[local_idx]  += s_cx[local_idx + stride];
+                s_cy[local_idx]  += s_cy[local_idx + stride];
             }
         }
 
-        s_lum[local_idx] = pixel_luminosity;
-        s_cx[local_idx]  = local_cx;
-        s_cy[local_idx]  = local_cy;
+        ctx->results[group_idx].lum = s_lum[0];
+        ctx->results[group_idx].cx  = s_cx[0];
+        ctx->results[group_idx].cy  = s_cy[0];
     }
+}
 
-    // Phase 2: High-speed parallel tree reduction inside the workgroup
-    for (uint32_t stride = 128u; stride > 0u; stride >>= 1u) {
-        for (uint32_t local_idx = 0; local_idx < stride; ++local_idx) {
-            s_lum[local_idx] += s_lum[local_idx + stride];
-            s_cx[local_idx]  += s_cx[local_idx + stride];
-            s_cy[local_idx]  += s_cy[local_idx + stride];
-        }
-    }
-
-    // Phase 3: Write to isolated workgroup result slot (Zero race conditions)
-    if (result_slot) {
-        result_slot->lum = s_lum[0];
-        result_slot->cx  = s_cx[0];
-        result_slot->cy  = s_cy[0];
-    }
-
-    free(arg);
+#if defined(_WIN32) || defined(_WIN64)
+static DWORD WINAPI win_worker_routine(LPVOID lpParam) {
+    execute_worker_workload((struct PoolContext*)lpParam);
+    return 0;
+}
+#else
+static void* posix_worker_routine(void* arg) {
+    execute_worker_workload((struct PoolContext*)arg);
     return NULL;
 }
+#endif
 
 bool execute_lighting_pipeline(
     struct PipelineUniforms cfg,
     const uint32_t* y_plane_buffer,
     size_t y_plane_buffer_len,
-    void* unused_atomics, // Kept for interface compatibility
+    void* unused_atomics,
     struct LightingOutput* output_data
 ) {
+    const uint32_t WG_SIZE_X = 16;
+    const uint32_t WG_SIZE_Y = 16;
+    uint32_t num_groups_x;
+    uint32_t num_groups_y;
+    uint32_t total_groups;
+    struct WorkgroupResult* results;
+    long processors;
+    size_t thread_count;
+    struct PoolContext ctx;
+#if defined(_WIN32) || defined(_WIN64)
+    HANDLE* threads;
+#else
+    pthread_t* threads;
+#endif
+    size_t spawned_threads;
+    size_t i;
+    double total_lum;
+    double total_cx;
+    double total_cy;
+    float total_samples;
+    float final_lum;
+    float final_cx;
+    float final_cy;
+    float total_weight;
+    float mean_cx;
+    float mean_cy;
+    float norm_x;
+    float norm_y;
+    float radial_sq;
+    struct Vector3 dir;
+    float len;
+
     (void)unused_atomics;
 
     if (cfg.width == 0 || cfg.height == 0 || cfg.stride < cfg.width || !y_plane_buffer || !output_data) {
         return false;
     }
 
-    const uint32_t WG_SIZE_X = 16;
-    const uint32_t WG_SIZE_Y = 16;
-
-    uint32_t num_groups_x = (cfg.width + WG_SIZE_X - 1) / WG_SIZE_X;
-    uint32_t num_groups_y = (cfg.height + WG_SIZE_Y - 1) / WG_SIZE_Y;
-    uint32_t total_groups = num_groups_x * num_groups_y;
+    num_groups_x = (cfg.width + WG_SIZE_X - 1) / WG_SIZE_X;
+    num_groups_y = (cfg.height + WG_SIZE_Y - 1) / WG_SIZE_Y;
+    total_groups = num_groups_x * num_groups_y;
 
     if (total_groups == 0) return false;
 
-    // Allocate thread handles and independent workgroup result buffers
-    pthread_t* threads = malloc(total_groups * sizeof(pthread_t));
-    struct WorkgroupResult* results = malloc(total_groups * sizeof(struct WorkgroupResult));
-
-    if (!threads || !results) {
-        free(threads);
-        free(results);
+    results = (struct WorkgroupResult*)malloc(total_groups * sizeof(struct WorkgroupResult));
+    if (!results) {
         return false;
     }
 
-    size_t thread_count = 0;
-    bool execution_failed = false;
-
-    for (uint32_t gy = 0; gy < num_groups_y; ++gy) {
-        for (uint32_t gx = 0; gx < num_groups_x; ++gx) {
-            uint32_t group_idx = gy * num_groups_x + gx;
-
-            struct ThreadArg* arg = malloc(sizeof(struct ThreadArg));
-            if (!arg) {
-                execution_failed = true;
-                break;
-            }
-            
-            arg->gx = gx;
-            arg->gy = gy;
-            arg->cfg = cfg;
-            arg->y_plane_buffer = y_plane_buffer;
-            arg->y_plane_size = y_plane_buffer_len;
-            arg->result_slot = &results[group_idx];
-
-            if (pthread_create(&threads[thread_count], NULL, worker_routine, arg) == 0) {
-                thread_count++;
-            } else {
-                free(arg);
-                execution_failed = true;
-                break;
-            }
-        }
-        if (execution_failed) break;
+    processors = get_processor_count();
+    if (processors < 1) processors = 4;
+    thread_count = (size_t)processors;
+    if (thread_count > (size_t)total_groups) {
+        thread_count = (size_t)total_groups;
     }
 
-    // Join all threads — pthread_join guarantees full memory visibility of all thread writes
-    for (size_t i = 0; i < thread_count; ++i) {
+    ctx.cfg = cfg;
+    ctx.y_plane_buffer = y_plane_buffer;
+    ctx.y_plane_size = y_plane_buffer_len;
+    ctx.num_groups_x = num_groups_x;
+    ctx.num_groups_y = num_groups_y;
+    ctx.total_groups = total_groups;
+    ctx.next_group_idx = 0;
+    ctx.results = results;
+
+#if defined(_WIN32) || defined(_WIN64)
+    InitializeCriticalSection(&ctx.mutex);
+    threads = (HANDLE*)malloc(thread_count * sizeof(HANDLE));
+#else
+    pthread_mutex_init(&ctx.mutex, NULL);
+    threads = (pthread_t*)malloc(thread_count * sizeof(pthread_t));
+#endif
+
+    if (!threads) {
+        free(results);
+#if defined(_WIN32) || defined(_WIN64)
+        DeleteCriticalSection(&ctx.mutex);
+#else
+        pthread_mutex_destroy(&ctx.mutex);
+#endif
+        return false;
+    }
+
+    spawned_threads = 0;
+    for (i = 0; i < thread_count; ++i) {
+#if defined(_WIN32) || defined(_WIN64)
+        threads[i] = CreateThread(NULL, 0, win_worker_routine, &ctx, 0, NULL);
+        if (threads[i] != NULL) {
+            spawned_threads++;
+        } else {
+            break;
+        }
+#else
+        if (pthread_create(&threads[i], NULL, posix_worker_routine, &ctx) == 0) {
+            spawned_threads++;
+        } else {
+            break;
+        }
+#endif
+    }
+
+    if (spawned_threads == 0) {
+        free(threads);
+        free(results);
+#if defined(_WIN32) || defined(_WIN64)
+        DeleteCriticalSection(&ctx.mutex);
+#else
+        pthread_mutex_destroy(&ctx.mutex);
+#endif
+        return false;
+    }
+
+#if defined(_WIN32) || defined(_WIN64)
+    WaitForMultipleObjects((DWORD)spawned_threads, threads, TRUE, INFINITE);
+    for (i = 0; i < spawned_threads; ++i) {
+        CloseHandle(threads[i]);
+    }
+    DeleteCriticalSection(&ctx.mutex);
+#else
+    for (i = 0; i < spawned_threads; ++i) {
         pthread_join(threads[i], NULL);
     }
+    pthread_mutex_destroy(&ctx.mutex);
+#endif
 
     free(threads);
 
-    if (execution_failed) {
-        free(results);
-        return false;
-    }
+    total_lum = 0.0;
+    total_cx = 0.0;
+    total_cy = 0.0;
 
-    // Phase 4: Sequential Reduction on Main Thread (Deterministic & Bug-Free)
-    double total_lum = 0.0;
-    double total_cx = 0.0;
-    double total_cy = 0.0;
-
-    for (uint32_t i = 0; i < total_groups; ++i) {
+    for (i = 0; i < (size_t)total_groups; ++i) {
         total_lum += (double)results[i].lum;
         total_cx  += (double)results[i].cx;
         total_cy  += (double)results[i].cy;
@@ -205,28 +321,31 @@ bool execute_lighting_pipeline(
 
     free(results);
 
-    float total_samples = (float)(cfg.width * cfg.height);
+    total_samples = (float)((uint64_t)cfg.width * (uint64_t)cfg.height);
     if (total_samples > 0.0f) {
-        float final_lum = (float)total_lum;
-        float final_cx  = (float)total_cx;
-        float final_cy  = (float)total_cy;
+        final_lum = (float)total_lum;
+        final_cx  = (float)total_cx;
+        final_cy  = (float)total_cy;
 
-        float total_weight = final_lum / 255.0f;
+        total_weight = final_lum / 255.0f;
 
         output_data->ambient_intensity = final_lum / (total_samples * 255.0f);
         output_data->color_temp_kelvin = 6500.0f * (output_data->ambient_intensity + 0.5f);
 
         if (total_weight > 0.0f) {
-            float mean_cx = final_cx / total_weight;
-            float mean_cy = final_cy / total_weight;
+            mean_cx = final_cx / total_weight;
+            mean_cy = final_cy / total_weight;
 
-            float norm_x = (mean_cx - ((float)cfg.width * 0.5f)) / ((float)cfg.width * 0.5f);
-            float norm_y = (mean_cy - ((float)cfg.height * 0.5f)) / ((float)cfg.height * 0.5f);
-            float radial_sq = (norm_x * norm_x) + (norm_y * norm_y);
+            norm_x = (mean_cx - ((float)cfg.width * 0.5f)) / ((float)cfg.width * 0.5f);
+            norm_y = (mean_cy - ((float)cfg.height * 0.5f)) / ((float)cfg.height * 0.5f);
+            radial_sq = (norm_x * norm_x) + (norm_y * norm_y);
             if (radial_sq > 1.0f) radial_sq = 1.0f;
 
-            struct Vector3 dir = {norm_x, -norm_y, 1.0f - sqrtf(radial_sq)};
-            float len = sqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+            dir.x = norm_x;
+            dir.y = -norm_y;
+            dir.z = 1.0f - sqrtf(radial_sq);
+            
+            len = sqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
             if (len > 0.0001f) {
                 dir.x /= len;
                 dir.y /= len;
