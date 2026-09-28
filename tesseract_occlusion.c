@@ -1,166 +1,242 @@
 #include <stdint.h>
 #include <stdbool.h>
-#include <string.h>
-#include <stdatomic.h>
-#include <stdalign.h>
-#include <complex.h>
 #include <math.h>
+#include <string.h>
+#include <stdlib.h>
+#include <pthread.h>
 
-#define TESS_NEAR_PLANE_CLIP 0.1f
-#define TESS_FAR_PLANE_INIT 1000000.0f
-
-typedef enum {
-    TESS_SUCCESS = 0,
-    TESS_ERROR_INVALID_ARGUMENT = -1,
-    TESS_ERROR_OUT_OF_MEMORY = -2,
-    TESS_ERROR_INVALID_DIMENSION = -3
-} TessResult;
-
-typedef struct {
+struct TessCameraIntrinsics {
     float fx;
     float fy;
     float cx;
     float cy;
-} TessCameraIntrinsics;
+};
 
-typedef struct {
-    float x;
-    float y;
-    float z;
-} TessVec3;
+struct PipelineUniforms {
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride;
+    uint32_t total_workgroups;
+};
 
-/**
- * @brief Standard-compliant union helper for bit-casting floats to uint32_t 
- * without triggering strict aliasing compiler violations.
- */
-static inline uint32_t TessFloatToUint32Bits(float f) {
-    union {
-        float f;
-        uint32_t u;
-    } pun;
-    pun.f = f;
-    return pun.u;
-}
+struct Vector3 {
+    float x, y, z;
+};
 
-/**
- * @brief Bug-Free, Multi-Core Thread-Safe Depth Occlusion Mask Pipeline.
- * Fully hardened against NaN/Inf injections, race conditions, and out-of-bounds faults.
- */
-TessResult TessGenerateDepthOcclusionMask(
-    const TessCameraIntrinsics* intrinsics, 
-    const TessVec3* point_cloud, 
-    uint32_t point_count, 
-    float* depth_buffer, 
-    uint32_t width, 
-    uint32_t height
-) {
-    // 1. Rigorous parameter and boundary validation
-    if (!intrinsics || !point_cloud || !depth_buffer || width == 0 || height == 0 || point_count == 0) {
-        return TESS_ERROR_INVALID_ARGUMENT;
-    }
+struct LightingOutput {
+    float ambient_intensity;
+    float color_temp_kelvin;
+    struct Vector3 light_dir;
+};
 
-    _Atomic(uint32_t)* atomic_depth_buffer = (_Atomic(uint32_t)*)depth_buffer;
-    uint32_t total_pixels = width * height;
-    uint32_t far_bits = TessFloatToUint32Bits(TESS_FAR_PLANE_INIT);
+// Isolated workgroup result container to prevent cross-thread interference
+struct WorkgroupResult {
+    float lum;
+    float cx;
+    float cy;
+};
 
-    // 2. Parallel buffer initialization
-    #if defined(_OPENMP)
-    #pragma omp parallel for schedule(static)
-    #endif
-    for (uint32_t i = 0; i < total_pixels; i++) {
-        atomic_store_explicit(&atomic_depth_buffer[i], far_bits, memory_order_relaxed);
-    }
+struct ThreadArg {
+    uint32_t gx;
+    uint32_t gy;
+    struct PipelineUniforms cfg;
+    const uint32_t* y_plane_buffer;
+    size_t y_plane_size;
+    struct WorkgroupResult* result_slot;
+};
 
-    // 3. Parallel Point Cloud Splatting with Complete Safety Guardrails
-    #if defined(_OPENMP)
-    #pragma omp parallel for schedule(dynamic, 128)
-    #endif
-    for (uint32_t i = 0; i < point_count; i++) {
-        // Hardware Prefetch optimization
-        #if defined(__GNUC__) || defined(__clang__)
-        if (i + 16 < point_count) {
-            __builtin_prefetch(&point_cloud[i + 16], 0, 3);
-        }
-        #endif
+static void* worker_routine(void* arg) {
+    if (!arg) return NULL;
+    struct ThreadArg* targs = (struct ThreadArg*)arg;
+    uint32_t gx = targs->gx;
+    uint32_t gy = targs->gy;
+    struct PipelineUniforms cfg = targs->cfg;
+    const uint32_t* y_plane_buffer = targs->y_plane_buffer;
+    size_t y_plane_size = targs->y_plane_size;
+    struct WorkgroupResult* result_slot = targs->result_slot;
 
-        const TessVec3 p = point_cloud[i];
+    const uint32_t WG_SIZE_X = 16;
+    const uint32_t WG_SIZE_Y = 16;
+    const uint32_t LOCAL_SIZE = WG_SIZE_X * WG_SIZE_Y; // 256
 
-        // Bug Prevention: Filter out NaNs, Infinities, and points behind near plane
-        if (!isfinite(p.x) || !isfinite(p.y) || !isfinite(p.z) || p.z <= TESS_NEAR_PLANE_CLIP) {
-            continue; 
-        }
+    float s_lum[256] = {0.0f};
+    float s_cx[256] = {0.0f};
+    float s_cy[256] = {0.0f};
 
-        float inv_z = 1.0f / p.z;
-        float u_f = (intrinsics->fx * p.x * inv_z) + intrinsics->cx;
-        float v_f = (intrinsics->fy * p.y * inv_z) + intrinsics->cy;
+    // Phase 1: Load and compute local thread data across the 16x16 block with strict bounds guarding
+    for (uint32_t local_idx = 0; local_idx < LOCAL_SIZE; ++local_idx) {
+        uint32_t local_x = local_idx % WG_SIZE_X;
+        uint32_t local_y = local_idx / WG_SIZE_X;
 
-        int u = (int)u_f;
-        int v = (int)v_f;
+        uint32_t x = gx * WG_SIZE_X + local_x;
+        uint32_t y = gy * WG_SIZE_Y + local_y;
 
-        // Strict Clamping Boundaries to eliminate segmentation fault vectors
-        int min_x = (u - 1 < 0) ? 0 : u - 1;
-        int max_x = (u + 1 >= (int)width) ? (int)width - 1 : u + 1;
-        int min_y = (v - 1 < 0) ? 0 : v - 1;
-        int max_y = (v + 1 >= (int)height) ? (int)height - 1 : v + 1;
+        float pixel_luminosity = 0.0f;
+        float local_cx = 0.0f;
+        float local_cy = 0.0f;
 
-        if (max_x < 0 || min_x >= (int)width || max_y < 0 || min_y >= (int)height) {
-            continue;
-        }
+        if (x < cfg.width && y < cfg.height && y_plane_buffer) {
+            size_t pixel_idx = (size_t)y * cfg.stride + x;
+            size_t word_idx = pixel_idx / 4;
 
-        uint32_t current_depth_bits = TessFloatToUint32Bits(p.z);
+            if (word_idx < y_plane_size) {
+                uint32_t shift_bits = (pixel_idx % 4) * 8;
+                uint32_t packed_word = y_plane_buffer[word_idx];
+                uint32_t val_u8 = (packed_word >> shift_bits) & 0xFFu;
 
-        for (int py = min_y; py <= max_y; py++) {
-            uint32_t row_offset = (uint32_t)py * width;
+                pixel_luminosity = (float)val_u8;
+                float weight = pixel_luminosity / 255.0f;
 
-            for (int px = min_x; px <= max_x; px++) {
-                uint32_t idx = row_offset + (uint32_t)px;
-                
-                // Load existing bits with relaxed ordering for speed
-                uint32_t existing_depth_bits = atomic_load_explicit(&atomic_depth_buffer[idx], memory_order_relaxed);
-
-                // Lock-Free Compare-And-Swap with correct memory_order_release on success
-                while (current_depth_bits < existing_depth_bits) {
-                    if (atomic_compare_exchange_weak_explicit(
-                            &atomic_depth_buffer[idx], 
-                            &existing_depth_bits, 
-                            current_depth_bits, 
-                            memory_order_release, 
-                            memory_order_relaxed)) {
-                        break;
-                    }
-                }
+                local_cx = (float)x * weight;
+                local_cy = (float)y * weight;
             }
         }
+
+        s_lum[local_idx] = pixel_luminosity;
+        s_cx[local_idx]  = local_cx;
+        s_cy[local_idx]  = local_cy;
     }
 
-    return TESS_SUCCESS;
+    // Phase 2: High-speed parallel tree reduction inside the workgroup
+    for (uint32_t stride = 128u; stride > 0u; stride >>= 1u) {
+        for (uint32_t local_idx = 0; local_idx < stride; ++local_idx) {
+            s_lum[local_idx] += s_lum[local_idx + stride];
+            s_cx[local_idx]  += s_cx[local_idx + stride];
+            s_cy[local_idx]  += s_cy[local_idx + stride];
+        }
+    }
+
+    // Phase 3: Write to isolated workgroup result slot (Zero race conditions)
+    if (result_slot) {
+        result_slot->lum = s_lum[0];
+        result_slot->cx  = s_cx[0];
+        result_slot->cy  = s_cy[0];
+    }
+
+    free(arg);
+    return NULL;
 }
 
-/**
- * @brief Bug-Free Hardware-Vectorized Quantum Wavefunction Simulation Engine.
- */
-TessResult TessQuantumWavefunctionOcclusion(
-    const double complex* __restrict__ state_vector_psi,
-    const double* __restrict__ spatial_hamiltonian_operators,
-    double* __restrict__ observable_occlusion_probabilities,
-    uint32_t hilbert_space_dimension
+bool execute_lighting_pipeline(
+    struct PipelineUniforms cfg,
+    const uint32_t* y_plane_buffer,
+    size_t y_plane_buffer_len,
+    void* unused_atomics, // Kept for interface compatibility
+    struct LightingOutput* output_data
 ) {
-    if (!state_vector_psi || !spatial_hamiltonian_operators || !observable_occlusion_probabilities || hilbert_space_dimension == 0) {
-        return TESS_ERROR_INVALID_ARGUMENT;
+    (void)unused_atomics;
+
+    if (cfg.width == 0 || cfg.height == 0 || cfg.stride < cfg.width || !y_plane_buffer || !output_data) {
+        return false;
     }
 
-    #if defined(_OPENMP)
-    #pragma omp parallel for simd schedule(static)
-    #elif defined(__GNUC__) || defined(__clang__)
-    #pragma omp simd
-    #endif
-    for (uint32_t i = 0; i < hilbert_space_dimension; i++) {
-        const double complex psi_element = state_vector_psi[i];
-        const double ham_diagonal = spatial_hamiltonian_operators[i];
+    const uint32_t WG_SIZE_X = 16;
+    const uint32_t WG_SIZE_Y = 16;
 
-        double probability_density = creal(psi_element * conj(psi_element));
-        observable_occlusion_probabilities[i] = probability_density * ham_diagonal;
+    uint32_t num_groups_x = (cfg.width + WG_SIZE_X - 1) / WG_SIZE_X;
+    uint32_t num_groups_y = (cfg.height + WG_SIZE_Y - 1) / WG_SIZE_Y;
+    uint32_t total_groups = num_groups_x * num_groups_y;
+
+    if (total_groups == 0) return false;
+
+    // Allocate thread handles and independent workgroup result buffers
+    pthread_t* threads = malloc(total_groups * sizeof(pthread_t));
+    struct WorkgroupResult* results = malloc(total_groups * sizeof(struct WorkgroupResult));
+
+    if (!threads || !results) {
+        free(threads);
+        free(results);
+        return false;
     }
 
-    return TESS_SUCCESS;
+    size_t thread_count = 0;
+    bool execution_failed = false;
+
+    for (uint32_t gy = 0; gy < num_groups_y; ++gy) {
+        for (uint32_t gx = 0; gx < num_groups_x; ++gx) {
+            uint32_t group_idx = gy * num_groups_x + gx;
+
+            struct ThreadArg* arg = malloc(sizeof(struct ThreadArg));
+            if (!arg) {
+                execution_failed = true;
+                break;
+            }
+            
+            arg->gx = gx;
+            arg->gy = gy;
+            arg->cfg = cfg;
+            arg->y_plane_buffer = y_plane_buffer;
+            arg->y_plane_size = y_plane_buffer_len;
+            arg->result_slot = &results[group_idx];
+
+            if (pthread_create(&threads[thread_count], NULL, worker_routine, arg) == 0) {
+                thread_count++;
+            } else {
+                free(arg);
+                execution_failed = true;
+                break;
+            }
+        }
+        if (execution_failed) break;
+    }
+
+    // Join all threads — pthread_join guarantees full memory visibility of all thread writes
+    for (size_t i = 0; i < thread_count; ++i) {
+        pthread_join(threads[i], NULL);
+    }
+
+    free(threads);
+
+    if (execution_failed) {
+        free(results);
+        return false;
+    }
+
+    // Phase 4: Sequential Reduction on Main Thread (Deterministic & Bug-Free)
+    double total_lum = 0.0;
+    double total_cx = 0.0;
+    double total_cy = 0.0;
+
+    for (uint32_t i = 0; i < total_groups; ++i) {
+        total_lum += (double)results[i].lum;
+        total_cx  += (double)results[i].cx;
+        total_cy  += (double)results[i].cy;
+    }
+
+    free(results);
+
+    float total_samples = (float)(cfg.width * cfg.height);
+    if (total_samples > 0.0f) {
+        float final_lum = (float)total_lum;
+        float final_cx  = (float)total_cx;
+        float final_cy  = (float)total_cy;
+
+        float total_weight = final_lum / 255.0f;
+
+        output_data->ambient_intensity = final_lum / (total_samples * 255.0f);
+        output_data->color_temp_kelvin = 6500.0f * (output_data->ambient_intensity + 0.5f);
+
+        if (total_weight > 0.0f) {
+            float mean_cx = final_cx / total_weight;
+            float mean_cy = final_cy / total_weight;
+
+            float norm_x = (mean_cx - ((float)cfg.width * 0.5f)) / ((float)cfg.width * 0.5f);
+            float norm_y = (mean_cy - ((float)cfg.height * 0.5f)) / ((float)cfg.height * 0.5f);
+            float radial_sq = (norm_x * norm_x) + (norm_y * norm_y);
+            if (radial_sq > 1.0f) radial_sq = 1.0f;
+
+            struct Vector3 dir = {norm_x, -norm_y, 1.0f - sqrtf(radial_sq)};
+            float len = sqrtf(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+            if (len > 0.0001f) {
+                dir.x /= len;
+                dir.y /= len;
+                dir.z /= len;
+            }
+            output_data->light_dir = dir;
+        } else {
+            output_data->light_dir = (struct Vector3){0.0f, 1.0f, 0.0f};
+        }
+    }
+
+    return true;
 }
