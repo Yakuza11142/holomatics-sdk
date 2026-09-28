@@ -5,7 +5,7 @@ use std::ffi::c_void;
 extern "C" {
     fn System_get_raw_view_matrix() -> Matrix4;
     fn System_get_raw_projection_matrix() -> Matrix4;
-    #[allow(dead_code)] // Suppresses warning since trajectory handles pose computation here
+    #[allow(dead_code)]
     fn System_get_raw_camera_pose() -> Vector3;
     fn System_get_raw_light_intensity() -> f32;
     fn System_read_ar_plane_buffer() -> Tensor;
@@ -45,18 +45,23 @@ impl Tensor {
     /// Safe low-level allocation frame tracking logic replacing tensor.alloc()
     pub unsafe fn alloc(dimensions: &[i32]) -> Self {
         let mut shape = [0; 4];
-        let mut total_elements = 1;
-        for (i, &dim) in dimensions.iter().enumerate().take(4) {
-            shape[i] = dim;
-            total_elements *= dim as usize;
+        let mut total_elements: usize = 1;
+        let len = dimensions.len().min(4);
+        
+        for i in 0..len {
+            shape[i] = dimensions[i];
+            total_elements = total_elements.saturating_mul(dimensions[i].max(1) as usize);
         }
 
-        // Prevent layout unwrapping panics on empty allocations
         if total_elements == 0 {
             total_elements = 1;
         }
 
-        let layout = Layout::array::<f32>(total_elements).unwrap();
+        let layout = match Layout::array::<f32>(total_elements) {
+            Ok(l) => l,
+            Err(_) => panic!("Tensor Layout Allocation Error: Invalid dimensions."),
+        };
+        
         let data = alloc(layout) as *mut f32;
         if data.is_null() {
             panic!("Tensor Allocation Failure: Out of physical NDK memory.");
@@ -65,21 +70,30 @@ impl Tensor {
         Tensor {
             data,
             shape,
-            dimensions: dimensions.len() as i32,
+            dimensions: len as i32,
         }
     }
 
     /// Explicit clean deallocation routine to prevent spatial frame memory leaks
     pub unsafe fn free_memory(&mut self) {
         if !self.data.is_null() {
-            let mut total_elements = 1;
-            for i in 0..(self.dimensions as usize).min(4) {
-                total_elements *= self.shape[i] as usize;
-            }
-            if total_elements == 0 { total_elements = 1; }
+            let mut total_elements: usize = 1;
+            let dims = (self.dimensions as usize).min(4);
             
-            let layout = Layout::array::<f32>(total_elements).unwrap();
-            dealloc(self.data as *mut u8, layout);
+            for i in 0..dims {
+                let dim_val = self.shape[i];
+                if dim_val > 0 {
+                    total_elements = total_elements.saturating_mul(dim_val as usize);
+                }
+            }
+            
+            if total_elements == 0 { 
+                total_elements = 1; 
+            }
+
+            if let Ok(layout) = Layout::array::<f32>(total_elements) {
+                dealloc(self.data as *mut u8, layout);
+            }
             self.data = std::ptr::null_mut();
         }
     }
@@ -132,7 +146,6 @@ pub struct NativeSpatialBridge {
     pub is_initialized: bool,
 }
 
-/// Root-level entry point functions ensure pristine JNI/C symbol visibility
 #[no_mangle]
 pub extern "C" fn native_spatial_bridge_init() -> NativeSpatialBridge {
     NativeSpatialBridge { is_initialized: true }
@@ -144,7 +157,6 @@ pub unsafe extern "C" fn native_spatial_bridge_poll_frame(bridge: *const NativeS
         panic!("Bridge Error: Context is null or uninitialized.");
     }
 
-    // FIXED: Dropped 'mut' flag parameter to eliminate compiler warnings
     let depth_stream = System_get_raw_depth_stream();
     let point_cloud = System_read_spatial_point_cloud();
 
@@ -152,7 +164,7 @@ pub unsafe extern "C" fn native_spatial_bridge_poll_frame(bridge: *const NativeS
     let segment_labels = System_classify_objects_segmentation(&depth_stream);
     let calculated_pose = System_compute_vslam_trajectory(&point_cloud);
 
-    let frame = ARSpatialFrame {
+    ARSpatialFrame {
         view_matrix: System_get_raw_view_matrix(),
         projection_matrix: System_get_raw_projection_matrix(),
         camera_pose: calculated_pose,
@@ -164,10 +176,8 @@ pub unsafe extern "C" fn native_spatial_bridge_poll_frame(bridge: *const NativeS
             semantic_labels: segment_labels,
         },
         depth_map: depth_stream,
-        point_cloud: point_cloud,
-    };
-
-    frame
+        point_cloud,
+    }
 }
 
 #[no_mangle]
@@ -204,25 +214,25 @@ impl Widget for ARWorldView {
             let bridge_ptr = &self.bridge as *const NativeSpatialBridge;
             let mut spatial = native_spatial_bridge_poll_frame(bridge_ptr);
 
-            // Forward layout render signal downstream to clear child widgets
             self.child.render(canvas);
 
-            // Clean out the memory buffers so frame data doesn't leak into RAM
             spatial.free_memory();
         }
     }
 }
 
 // ----------------------------------------------------------------------------
-// FRAMEWORK COMPILER PLACEHOLDERS (Warnings Silenced)
+// FRAMEWORK COMPILER PLACEHOLDERS (Safe Dummy Arrays)
 // ----------------------------------------------------------------------------
 
 #[allow(non_snake_case)]
 unsafe fn System_get_raw_depth_stream() -> Tensor { 
-    Tensor::alloc(&) 
+    let default_dims: [i32; 4] = [1, 1, 1, 1];
+    Tensor::alloc(&default_dims) 
 }
 
 #[allow(non_snake_case)]
 unsafe fn System_read_spatial_point_cloud() -> Tensor { 
-    Tensor::alloc(&) 
+    let default_dims: [i32; 4] = [1, 1, 1, 1];
+    Tensor::alloc(&default_dims) 
 }
