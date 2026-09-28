@@ -1,11 +1,7 @@
-// ============================================================================
-// Module: TesseractUI.Camera (Pure Rust Framework Refactor)
-// ============================================================================
+use std::alloc::{alloc, dealloc, Layout};
+use std::ffi::c_void;
 
-use std::alloc::{alloc, Layout};
-use std::ffi::c_void; // FIX: Core zero-dependency FFI type to eliminate external crate lookups
-
-// Simulating your raw system low-level external engine calls
+// Simulating raw system low-level external engine calls
 extern "C" {
     fn System_get_raw_view_matrix() -> Matrix4;
     fn System_get_raw_projection_matrix() -> Matrix4;
@@ -54,6 +50,11 @@ impl Tensor {
             total_elements *= dim as usize;
         }
 
+        // Prevent layout unwrapping panics on empty allocations
+        if total_elements == 0 {
+            total_elements = 1;
+        }
+
         let layout = Layout::array::<f32>(total_elements).unwrap();
         let data = alloc(layout) as *mut f32;
         if data.is_null() {
@@ -66,6 +67,21 @@ impl Tensor {
             dimensions: dimensions.len() as i32,
         }
     }
+
+    /// Explicit clean deallocation routine to prevent spatial frame memory leaks
+    pub unsafe fn free_memory(&mut self) {
+        if !self.data.is_null() {
+            let mut total_elements = 1;
+            for i in 0..(self.dimensions as usize).min(4) {
+                total_elements *= self.shape[i] as usize;
+            }
+            if total_elements == 0 { total_elements = 1; }
+            
+            let layout = Layout::array::<f32>(total_elements).unwrap();
+            dealloc(self.data as *mut u8, layout);
+            self.data = std::ptr::null_mut();
+        }
+    }
 }
 
 #[repr(C)]
@@ -74,6 +90,14 @@ pub struct MeshChunk {
     pub vertices: Tensor,
     pub normals: Tensor,
     pub semantic_labels: Tensor,
+}
+
+impl MeshChunk {
+    pub unsafe fn free_memory(&mut self) {
+        self.vertices.free_memory();
+        self.normals.free_memory();
+        self.semantic_labels.free_memory();
+    }
 }
 
 #[repr(C)]
@@ -89,8 +113,17 @@ pub struct ARSpatialFrame {
     pub point_cloud: Tensor,
 }
 
+impl ARSpatialFrame {
+    pub unsafe fn free_memory(&mut self) {
+        self.detected_planes.free_memory();
+        self.spatial_mesh.free_memory();
+        self.depth_map.free_memory();
+        self.point_cloud.free_memory();
+    }
+}
+
 // ----------------------------------------------------------------------------
-// NATIVE SPATIAL BRIDGE ENGINE
+// NATIVE SPATIAL BRIDGE ENGINE INTERFACES (C-LINKABLE ENTRY POINTS)
 // ----------------------------------------------------------------------------
 
 #[repr(C)]
@@ -98,44 +131,52 @@ pub struct NativeSpatialBridge {
     pub is_initialized: bool,
 }
 
-impl NativeSpatialBridge {
-    /// Public static initializer matching your framework bootstrap
-    #[no_mangle]
-    pub extern "C" fn init() -> Self {
-        NativeSpatialBridge { is_initialized: true }
+/// FIXED: Root-level entry point functions ensure pristine JNI/C symbol visibility
+@no_mangle
+pub extern "C" fn native_spatial_bridge_init() -> NativeSpatialBridge {
+    NativeSpatialBridge { is_initialized: true }
+}
+
+@no_mangle
+pub unsafe extern "C" fn native_spatial_bridge_poll_frame(bridge: *const NativeSpatialBridge) -> ARSpatialFrame {
+    if bridge.is_null() || !(*bridge).is_initialized {
+        panic!("Bridge Error: Context is null or uninitialized.");
     }
 
-    /// Pulls, structures, and refines live sensor framework frames.
-    #[no_mangle]
-    pub unsafe extern "C" fn poll_frame(&self) -> ARSpatialFrame {
-        let mut frame = ARSpatialFrame {
-            view_matrix: System_get_raw_view_matrix(),
-            projection_matrix: System_get_raw_projection_matrix(),
-            camera_pose: System_get_raw_camera_pose(),
-            light_intensity: System_get_raw_light_intensity(),
-            detected_planes: System_read_ar_plane_buffer(),
-            spatial_mesh: MeshChunk {
-                vertices: Tensor::alloc(&[1024, 3]),
-                normals: Tensor::alloc(&[1024, 3]),
-                semantic_labels: Tensor::alloc(&[1024]),
-            },
-            depth_map: System_get_raw_depth_stream(),
-            point_cloud: System_read_spatial_point_cloud(),
-        };
+    let mut depth_stream = System_get_raw_depth_stream();
+    let mut point_cloud = System_read_spatial_point_cloud();
 
-        // Executes spatial meshing and VSLAM tracking directly inside high-speed cache lines
-        frame.spatial_mesh = System_reconstruct_scene_mesh(&frame.depth_map);
-        frame.spatial_mesh.semantic_labels = System_classify_objects_segmentation(&frame.depth_map);
-        frame.camera_pose = System_compute_vslam_trajectory(&frame.point_cloud);
+    // FIXED: Allocating directly from system engine calls to avoid leaking temporary allocations
+    let generated_mesh = System_reconstruct_scene_mesh(&depth_stream);
+    let mut segment_labels = System_classify_objects_segmentation(&depth_stream);
+    let calculated_pose = System_compute_vslam_trajectory(&point_cloud);
 
-        frame
-    }
+    let mut frame = ARSpatialFrame {
+        view_matrix: System_get_raw_view_matrix(),
+        projection_matrix: System_get_raw_projection_matrix(),
+        camera_pose: calculated_pose,
+        light_intensity: System_get_raw_light_intensity(),
+        detected_planes: System_read_ar_plane_buffer(),
+        spatial_mesh: MeshChunk {
+            vertices: generated_mesh.vertices,
+            normals: generated_mesh.normals,
+            semantic_labels: segment_labels,
+        },
+        depth_map: depth_stream,
+        point_cloud: point_cloud,
+    };
 
-    /// Securely pins global coordinate anchors across GIS pipelines
-    #[no_mangle]
-    pub unsafe extern "C" fn create_geospatial_anchor(&self, latitude: f32, longitude: f32, altitude: f32) -> Matrix4 {
-        System_bind_global_geospatial_anchor(latitude, longitude, altitude)
-    }
+    frame
+}
+
+@no_mangle
+pub unsafe extern "C" fn native_spatial_bridge_create_geospatial_anchor(
+    _bridge: *const NativeSpatialBridge, 
+    latitude: f32, 
+    longitude: f32, 
+    altitude: f32
+) -> Matrix4 {
+    System_bind_global_geospatial_anchor(latitude, longitude, altitude)
 }
 
 // ----------------------------------------------------------------------------
@@ -159,11 +200,14 @@ impl Widget for ARWorldView {
 
     fn render(&self, canvas: *mut c_void) {
         unsafe {
-            // FIX: Added underscore prefix to intentionally signal an unused binding loop
-            let _spatial = self.bridge.poll_frame();
+            let bridge_ptr = &self.bridge as *const NativeSpatialBridge;
+            let mut spatial = native_spatial_bridge_poll_frame(bridge_ptr);
 
             // Forward layout render signal downstream to clear child widgets
             self.child.render(canvas);
+
+            // FIXED: Clean out the memory buffers so frame data doesn't leak into RAM
+            spatial.free_memory();
         }
     }
 }
