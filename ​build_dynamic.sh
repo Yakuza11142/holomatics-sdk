@@ -2,55 +2,59 @@
 # Enforce strict error handling parameters to drop the pipeline if a step crashes
 set -euo pipefail
 
-# Default fallback values updated to match TessEngine.java and TessBridge.c
-SOURCE_FILE="${1:-TessBridge.c}"
-TARGET_OUTPUT="${2:-libTessSDK.so}"
+# 1. CONFIGURE YOUR NDK PATH (Update this path to match your machine's setup)
+ANDROID_NDK="${ANDROID_NDK:-$HOME/Android/Sdk/ndk/26.1.10909125}"
 
-# Default compiler fallback to clang++ with multi-threading support enabled
-CXX="${CXX:-clang++}"
-CXXFLAGS="${CXXFLAGS:--O3 -std=c++20 -pthread}"
-
-echo "⚙️ Initializing Dynamic Hardened Build Pipeline..."
-echo "  📄 Source: ${SOURCE_FILE}"
-echo "  🎯 Target: ${TARGET_OUTPUT}"
-
-# Pre-execution guard: Ensure input source file exists
-if [ ! -f "${SOURCE_FILE}" ]; then
-    echo "❌ Error: Source file '${SOURCE_FILE}' not found."
+if [ ! -d "$ANDROID_NDK" ]; then
+    echo "❌ Error: Android NDK not found at: $ANDROID_NDK"
+    echo " Please set the CORRECT path using: export ANDROID_NDK=/your/path"
     exit 1
 fi
 
-# Detect build target mode automatically based on file extension
-EXTRA_FLAGS=()
-if [[ "${TARGET_OUTPUT}" == *.so ]] || [[ "${TARGET_OUTPUT}" == *.dylib ]]; then
-    echo "📦 Target identified as shared library. Applying -fPIC -shared flags..."
-    EXTRA_FLAGS=(-fPIC -shared)
-elif [[ "${TARGET_OUTPUT}" == *.dll ]]; then
-    echo "📦 Target identified as Windows DLL. Applying dynamic library flags..."
-    EXTRA_FLAGS=(-shared)
-fi
+# Define the 4 standard Android Target Architectures
+ARCHS=("arm64-v8a" "armeabi-v7a" "x86" "x86_64")
+MIN_SDK="29" # Hardcoded to 29 due to 'memfd_create' requirements
 
-echo "🔨 Executing native compilation step..."
+echo "⚙️ Initializing Universal Android Cross-Compilation Pipeline..."
 
-# Dynamic compilation with hardened memory protection fences and explicit multi-threading
-# Note: Added linking flags for Android system logging libs (-llog -landroid)
-${CXX} ${CXXFLAGS} "${EXTRA_FLAGS[@]}" \
-    -fstack-protector-strong \
-    -D_FORTIFY_SOURCE=2 \
-    -Wformat -Werror=format-security \
-    -Wall -Wextra \
-    -I./ \
-    "${SOURCE_FILE}" -llog -landroid -o "${TARGET_OUTPUT}"
+# Clean out any old build folders
+rm -rf build_output
+mkdir -p build_output
 
-# Output verification check
-if [ -f "./${TARGET_OUTPUT}" ]; then
-    echo "✅ Native asset compiled successfully: ./${TARGET_OUTPUT}"
+# Loop and compile for every platform dynamically
+for ABI in "${ARCHS[@]}"; do
+    echo "=========================================================="
+    echo "🔨 Compiling TessSDK for target platform: $ABI"
+    echo "=========================================================="
     
-    # Print out structural details for verification debugging
-    if command -v file &> /dev/null; then
-        file "./${TARGET_OUTPUT}"
+    # Create isolated output directory structures
+    BUILD_DIR="build_output/cmake_${ABI}"
+    TARGET_DIR="build_output/jniLibs/${ABI}"
+    mkdir -p "$BUILD_DIR"
+    mkdir -p "$TARGET_DIR"
+    
+    # Run CMake pointing directly to the Android NDK cross-compilation toolchain
+    cmake -B "$BUILD_DIR" -H. \
+        -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
+        -DANDROID_ABI="$ABI" \
+        -DANDROID_PLATFORM="android-$MIN_SDK" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DANDROID_STL=c++_shared
+
+    # Compile the files
+    cmake --build "$BUILD_DIR" --config Release --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+    
+    # Copy the finished library out to the deployment directory
+    if [ -f "$BUILD_DIR/libTessSDK.so" ]; then
+        mv "$BUILD_DIR/libTessSDK.so" "$TARGET_DIR/libTessSDK.so"
+        echo "✅ Generated Universal Asset: $TARGET_DIR/libTessSDK.so"
+    else
+        echo "❌ Critical compilation failure: Target asset output missing for $ABI."
+        exit 1
     fi
-else
-    echo "❌ Critical compilation failure: Target asset output missing."
-    exit 1
-fi
+done
+
+echo "=========================================================="
+echo "🎉 Pipeline Completed! Universal binaries are inside the './build_output/jniLibs/' directory."
+echo "   Copy the 'jniLibs' folder directly into your Android Studio app project directory."
+echo "=========================================================="
