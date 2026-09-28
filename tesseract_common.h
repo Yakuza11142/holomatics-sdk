@@ -27,58 +27,12 @@ typedef enum {
     TESS_ERROR_OUT_OF_MEMORY = -7
 } TessResult;
 
-// ============================================================================
-// 1. MEMORY ARENA ALLOCATOR
-// ============================================================================
 typedef struct {
     uint8_t* buffer;
     size_t capacity;
     size_t offset;
 } TessMemoryArena;
 
-static inline TessResult TessArenaInit(TessMemoryArena* arena, size_t capacity) {
-    if (!arena || capacity == 0) return TESS_ERROR_INVALID_ARGUMENT;
-    arena->buffer = (uint8_t*)malloc(capacity);
-    if (!arena->buffer) return TESS_ERROR_OUT_OF_MEMORY;
-    arena->capacity = capacity;
-    arena->offset = 0;
-    return TESS_SUCCESS;
-}
-
-static inline void* TessArenaAlloc(TessMemoryArena* arena, size_t size, size_t alignment) {
-    if (!arena || size == 0) return NULL;
-    if ((alignment & (alignment - 1)) != 0 || alignment == 0) {
-        alignment = sizeof(void*);
-    }
-    size_t current_addr = (size_t)(arena->buffer + arena->offset);
-    size_t misalignment = current_addr & (alignment - 1);
-    size_t adjustment = misalignment ? (alignment - misalignment) : 0;
-
-    if (arena->offset + adjustment + size > arena->capacity) {
-        return NULL;
-    }
-    arena->offset += adjustment;
-    void* ptr = arena->buffer + arena->offset;
-    arena->offset += size;
-    return ptr;
-}
-
-static inline void TessArenaReset(TessMemoryArena* arena) {
-    if (arena) arena->offset = 0;
-}
-
-static inline void TessArenaFree(TessMemoryArena* arena) {
-    if (arena && arena->buffer) {
-        free(arena->buffer);
-        arena->buffer = NULL;
-        arena->capacity = 0;
-        arena->offset = 0;
-    }
-}
-
-// ============================================================================
-// 2. DATA STRUCTURES & QUEUES
-// ============================================================================
 typedef struct {
     uint32_t opcode;
     float payload[4];
@@ -114,79 +68,18 @@ typedef struct {
     _Alignas(64) atomic_uint tail;
 } TessLockFreeQueue;
 
-// ============================================================================
-// 3. HARDWARE ROLLING SHUTTER CORRECTION
-// ============================================================================
-static inline TessResult TessCorrectRollingShutter(TessCameraFrame* frame, const float gyro_velocity[3], float readout_time_seconds) {
-    if (!frame || !frame->y_plane || readout_time_seconds <= 0.0f) {
-        return TESS_ERROR_INVALID_ARGUMENT;
-    }
+// Function Declarations (Implemented in only ONE compilation unit, e.g., tesseract_ops.c)
+TessResult TessArenaInit(TessMemoryArena* arena, size_t capacity);
+void* TessArenaAlloc(TessMemoryArena* arena, size_t size, size_t alignment);
+void TessArenaReset(TessMemoryArena* arena);
+void TessArenaFree(TessMemoryArena* arena);
 
-    int32_t height = frame->height;
-    int32_t width = frame->width;
-    int32_t stride = frame->stride;
+TessResult TessCorrectRollingShutter(TessCameraFrame* frame, const float gyro_velocity[3], float readout_time_seconds);
 
-    if (width <= 0 || height <= 0 || stride < width || !isfinite(gyro_velocity[1])) {
-        return TESS_ERROR_INVALID_ARGUMENT;
-    }
+void TessQueueInit(TessLockFreeQueue* queue);
+TessResult TessQueuePushBatch(TessLockFreeQueue* queue, const TessCommand* cmds, size_t count, size_t* out_pushed);
 
-    const float gyro_scale = gyro_velocity[1] * readout_time_seconds * 100.0f / (float)height;
-
-    for (int32_t y = 0; y < height; ++y) {
-        int32_t dx = (int32_t)((float)y * gyro_scale);
-        if (dx == 0) continue;
-
-        uint8_t* row_ptr = frame->y_plane + (y * stride);
-
-        if (dx > 0 && dx < width) {
-            size_t shift = (size_t)dx;
-            memmove(row_ptr, row_ptr + shift, width - shift);
-            memset(row_ptr + (width - shift), 0, shift);
-        } else if (dx < 0 && -dx < width) {
-            size_t shift = (size_t)(-dx);
-            memmove(row_ptr + shift, row_ptr, width - shift);
-            memset(row_ptr, 0, shift);
-        }
-    }
-
-    return TESS_SUCCESS;
-}
-
-// ============================================================================
-// 4. CONCURRENCY QUEUE OPERATIONS
-// ============================================================================
-static inline void TessQueueInit(TessLockFreeQueue* queue) {
-    if (!queue) return;
-    atomic_init(&queue->head, 0);
-    atomic_init(&queue->tail, 0);
-    memset(queue->buffer, 0, sizeof(queue->buffer));
-}
-
-static inline TessResult TessQueuePushBatch(TessLockFreeQueue* queue, const TessCommand* cmds, size_t count, size_t* out_pushed) {
-    if (!queue || !cmds || count == 0) return TESS_ERROR_INVALID_ARGUMENT;
-
-    uint32_t current_tail = atomic_load_explicit(&queue->tail, memory_order_relaxed);
-    uint32_t current_head = atomic_load_explicit(&queue->head, memory_order_acquire);
-
-    uint32_t available = (current_head > current_tail) ? 
-        (current_head - current_tail - 1) : 
-        (TESS_RING_BUFFER_SIZE - current_tail + current_head - 1);
-
-    size_t to_push = (count < (size_t)available) ? count : (size_t)available;
-    if (to_push == 0) {
-        if (out_pushed) *out_pushed = 0;
-        return TESS_ERROR_QUEUE_FULL;
-    }
-
-    for (size_t i = 0; i < to_push; ++i) {
-        uint32_t next_tail = (current_tail + 1) & TESS_RING_BUFFER_MASK;
-        queue->buffer[current_tail].command = cmds[i];
-        current_tail = next_tail;
-    }
-
-    atomic_store_explicit(&queue->tail, current_tail, memory_order_release);
-    if (out_pushed) *out_pushed = to_push;
-    return TESS_SUCCESS;
-}
+TessResult TessMapExport(const TessNode* root_node, const char* filepath);
+TessResult TessMapImportAndReconstruct(TessMemoryArena* arena, const char* filepath, TessNode** out_root_node);
 
 #endif // TESSERACT_COMMON_H
