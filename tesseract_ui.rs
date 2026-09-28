@@ -5,6 +5,7 @@ use std::ffi::c_void;
 extern "C" {
     fn System_get_raw_view_matrix() -> Matrix4;
     fn System_get_raw_projection_matrix() -> Matrix4;
+    #[allow(dead_code)] // Suppresses warning since trajectory handles pose computation here
     fn System_get_raw_camera_pose() -> Vector3;
     fn System_get_raw_light_intensity() -> f32;
     fn System_read_ar_plane_buffer() -> Tensor;
@@ -131,7 +132,7 @@ pub struct NativeSpatialBridge {
     pub is_initialized: bool,
 }
 
-/// FIXED: Changed from @no_mangle to standard syntax attribute wrapper
+/// Root-level entry point functions ensure pristine JNI/C symbol visibility
 #[no_mangle]
 pub extern "C" fn native_spatial_bridge_init() -> NativeSpatialBridge {
     NativeSpatialBridge { is_initialized: true }
@@ -143,8 +144,9 @@ pub unsafe extern "C" fn native_spatial_bridge_poll_frame(bridge: *const NativeS
         panic!("Bridge Error: Context is null or uninitialized.");
     }
 
-    let mut depth_stream = System_get_raw_depth_stream();
-    let mut point_cloud = System_read_spatial_point_cloud();
+    // FIXED: Dropped 'mut' flag parameter to eliminate compiler warnings
+    let depth_stream = System_get_raw_depth_stream();
+    let point_cloud = System_read_spatial_point_cloud();
 
     let generated_mesh = System_reconstruct_scene_mesh(&depth_stream);
     let segment_labels = System_classify_objects_segmentation(&depth_stream);
@@ -217,10 +219,10 @@ impl Widget for ARWorldView {
 
 #[allow(non_snake_case)]
 unsafe fn System_get_raw_depth_stream() -> Tensor { 
-    Tensor::alloc(&[480, 640]) 
+    Tensor::alloc(&) 
 }
 
 #[allow(non_snake_case)]
 unsafe fn System_read_spatial_point_cloud() -> Tensor { 
-    Tensor::alloc(&[4096, 3]) 
+    Tensor::alloc(&) 
 }
