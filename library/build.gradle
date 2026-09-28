@@ -3,25 +3,25 @@ plugins {
 }
 
 android {
-    namespace 'com.holomatics.sdk'
+    // 1. FIXED: Namespace corrected to match native C++ JNI code bindings
+    namespace 'com.tesseract.ui'
     compileSdk 34
 
     defaultConfig {
-        minSdk 21
+        // 2. FIXED: Raised to API 29 because the binary requires 'memfd_create'
+        minSdk 29
         targetSdk 34
 
         ndk {
-            // Compiles universal native binaries for modern 64-bit phones, 
-            // legacy 32-bit targets, and desktop testing emulators.
-            abiFilters 'arm64-v8a', 'x86_64', 'armeabi-v7a'
+            // 3. FIXED: Added 'x86' to complete universal emulation and device compatibility
+            abiFilters 'arm64-v8a', 'x86_64', 'armeabi-v7a', 'x86'
         }
 
         externalNativeBuild {
             cmake {
-                // Maximum performance optimizations applied across BOTH pure C math files 
-                // and C++ pipeline configurations.
-                cFlags "-O3"
-                cppFlags "-std=c++17 -O3"
+                // Maximum performance optimizations applied with Link-Time Optimization (-flto)
+                cFlags "-O3 -flto"
+                cppFlags "-std=c++17 -O3 -flto"
                 arguments "-DANDROID_STL=c++_shared"
             }
         }
@@ -29,8 +29,6 @@ android {
 
     buildTypes {
         release {
-            // Enables aggressive Java code shrinking and dead-code stripping 
-            // to keep the background wrapper footprint incredibly small.
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
@@ -45,6 +43,5 @@ android {
 }
 
 dependencies {
-    // Heavy local tools (lint-gradle and aapt2) have been permanently stripped.
-    // Add lightweight, standard runtime dependencies here only if needed.
+    // Keep empty as requested; lightweight app architectures will bundle seamlessly here
 }
