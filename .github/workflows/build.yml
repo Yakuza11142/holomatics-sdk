@@ -1,91 +1,91 @@
--name: Tesseract Engine Compiler & Shared Object Build
--
--on:
-  - push:
-      - branches: [ main, master ]
-  - pull_request:
-      - branches: [ main, master ]
--
--jobs:
-  - build-shared-library:
-      - runs-on: ubuntu-latest
--
-      - steps:
-          - name: Checkout Codebase
-          - uses: actions/checkout@v4
--
-          - name: Install Android NDK & Rust Toolchain Targets
-          - run: |
-              sudo apt-get update
-              sudo apt-get install -y build-essential clang llvm
-              rustup target add aarch64-linux-android
--
-          - name: Compile Core Rust Spatial Module (tesseract_ui.rs)
-          - run: |
-              # Compile your pure Rust module directly into a high-performance static library object
-              rustc --target aarch64-linux-android -O --crate-type=staticlib tesseract_ui.rs -o libtesseract_ui.a
--
-          - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
-          - run: |
-              # 1. Locate the pre-installed Android NDK on the runner image
-              NDK_PATH="${ANDROID_NDK_LATEST_HOME}"
-              if [ -z "$NDK_PATH" ]; then
-                NDK_PATH="${ANDROID_HOME}/ndk-bundle"
-              fi
-              
-              echo "🤖 Utilizing Android NDK located at: $NDK_PATH"
-              
-              # 2. Select the cross-compiler toolchain parameters for ARM64 Android devices
-              TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
-              CLANG_C="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
-              CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
-              
-              # 3. Explicitly link search paths to eliminate recursive path conflicts
-              INCLUDE_FLAGS="-I. -I./src"
-              
-              # 4. Gather active native C engine core modules while strictly dropping old legacy duplicate files
-              CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" \
-                ! -name "TessBridge.c" \
-                ! -name "tesseract_pro.c" \
-                ! -name "tesseract_queue.c" \
-                ! -name "tesseract_unified.c" \
-                ! -name "tesseract_core.c")
-              
-              echo "🧨 Compiling selected active C engine files:"
-              echo "$CORE_C_FILES"
-              
-              echo "🔨 Compiling loose C engine components into mobile object modules..."
-              for file in $CORE_C_FILES; do
-                if [[ "$file" == *"tesseract_concurrency.c"* ]]; then
-                  $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -DTESS_API="" -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
-                else
-                  $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
-                fi
-              done
-              
-              # 5. Compile the JNI bridge file as pure C++ to link accurately with NDK system structures
-              echo "🔨 Compiling thread-safe JNI interface layer..."
-              $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" TessBridge.c -o TessBridge.o
-              
-              # 6. Gather all newly generated active ARM64 native object files
-              OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o")
-              
-              echo "🔨 Packaging final unified shared library: libTessSDK.so"
-              # Link all valid object modules and your Rust static library into your final framework package
-              $CLANG_CC -shared -fPIC -O3 -pthread \
-                        $OBJECT_FILES -L. -ltesseract_ui \
-                        -landroid -llog \
-                        -o libTessSDK.so
--
-          - name: Verify Exported Library Symbols
-          - run: |
-              file libTessSDK.so
-              echo "--- Exported Defined Symbols ---"
-              llvm-nm -D --defined-only libTessSDK.so
--
-          - name: Upload Build Artifacts
-          - uses: actions/upload-artifact@v4
-          - with:
-              name: tesseract-engine-binaries
-              path: |
-                libTessSDK.so
+name: Tesseract Engine Compiler & Shared Object Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-shared-library:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Install Android NDK & Rust Toolchain Targets
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang llvm
+          rustup target add aarch64-linux-android
+
+      - name: Compile Core Rust Spatial Module (tesseract_ui.rs)
+        run: |
+          # Compile your pure Rust module directly into a high-performance static library object
+          rustc --target aarch64-linux-android -O --crate-type=staticlib tesseract_ui.rs -o libtesseract_ui.a
+
+      - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
+        run: |
+          # 1. Locate the pre-installed Android NDK on the runner image
+          NDK_PATH="${ANDROID_NDK_LATEST_HOME}"
+          if [ -z "$NDK_PATH" ]; then
+            NDK_PATH="${ANDROID_HOME}/ndk-bundle"
+          fi
+          
+          echo "🤖 Utilizing Android NDK located at: $NDK_PATH"
+          
+          # 2. Select the cross-compiler toolchain parameters for ARM64 Android devices
+          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
+          CLANG_C="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
+          CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
+          
+          # 3. Explicitly link search paths to eliminate recursive path conflicts
+          INCLUDE_FLAGS="-I. -I./src"
+          
+          # 4. Gather active native C engine core modules while strictly dropping old legacy duplicate files
+          CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" \
+            ! -name "TessBridge.c" \
+            ! -name "tesseract_pro.c" \
+            ! -name "tesseract_queue.c" \
+            ! -name "tesseract_unified.c" \
+            ! -name "tesseract_core.c")
+          
+          echo "🧨 Compiling selected active C engine files:"
+          echo "$CORE_C_FILES"
+          
+          echo "🔨 Compiling loose C engine components into mobile object modules..."
+          for file in $CORE_C_FILES; do
+            if [[ "$file" == *"tesseract_concurrency.c"* ]]; then
+              $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -DTESS_API="" -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+            else
+              $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+            fi
+          done
+          
+          # 5. Compile the JNI bridge file as pure C++ to link accurately with NDK system structures
+          echo "🔨 Compiling thread-safe JNI interface layer..."
+          $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" TessBridge.c -o TessBridge.o
+          
+          # 6. Gather all newly generated active ARM64 native object files
+          OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o")
+          
+          echo "🔨 Packaging final unified shared library: libTessSDK.so"
+          # Link all valid object modules and your Rust static library into your final framework package
+          $CLANG_CC -shared -fPIC -O3 -pthread \
+                    $OBJECT_FILES -L. -ltesseract_ui \
+                    -landroid -llog \
+                    -o libTessSDK.so
+
+      - name: Verify Exported Library Symbols
+        run: |
+          file libTessSDK.so
+          echo "--- Exported Defined Symbols ---"
+          llvm-nm -D --defined-only libTessSDK.so
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tesseract-engine-binaries
+          path: |
+            libTessSDK.so
