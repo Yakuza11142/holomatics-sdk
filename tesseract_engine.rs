@@ -36,21 +36,24 @@ impl TesseractEngine {
         }
     }
 
-    /// Advances the system frame. Changed to `&mut self` to prevent multiple threads 
-    /// from modifying the same raw context pointer concurrently.
+    /// Advances the system frame. Validates float finiteness to prevent NaN injection.
     pub fn update(&mut self, delta_time: f32) -> Result<(), i32> {
         if self.ctx.is_null() { return Err(-2); }
-        if delta_time <= 0.0 || delta_time > 1.0 { return Err(-1); }
-        
+        if !delta_time.is_finite() || delta_time <= 0.0 || delta_time > 1.0 { 
+            return Err(-1); 
+        }
+
         let status = unsafe { tess_process_frame(self.ctx, delta_time) };
         if status == 0 { Ok(()) } else { Err(status) }
     }
 
-    /// Projects and transforms a spatial 3D vector. Uses `&self` safely because 
-    /// read operations do not mutate the internal matrix state layout memory blocks.
+    /// Projects and transforms a spatial 3D vector safely with finiteness validation.
     pub fn transform_vector(&self, in_vec: [f32; 3]) -> Result<[f32; 3], i32> {
         if self.ctx.is_null() { return Err(-2); }
-        
+        if !in_vec.iter().all(|v| v.is_finite()) {
+            return Err(-1);
+        }
+
         let mut out_vec = [0.0f32; 3];
         let status = unsafe {
             tess_transform_vector(self.ctx, in_vec.as_ptr(), out_vec.as_mut_ptr())
