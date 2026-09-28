@@ -43,15 +43,21 @@ TessResult TessArenaInit(TessMemoryArena* arena, size_t capacity) {
 }
 
 void* TessArenaAlloc(TessMemoryArena* arena, size_t size, size_t alignment) {
-    if (!arena) return NULL;
+    if (!arena || size == 0) return NULL;
+    
+    // Ensure alignment is a power of two
+    if ((alignment & (alignment - 1)) != 0 || alignment == 0) {
+        alignment = sizeof(void*);
+    }
+
     size_t current_addr = (size_t)(arena->buffer + arena->offset);
     size_t misalignment = current_addr & (alignment - 1);
     size_t adjustment = misalignment ? (alignment - misalignment) : 0;
-    
+
     if (arena->offset + adjustment + size > arena->capacity) {
         return NULL; // Out of Arena memory
     }
-    
+
     arena->offset += adjustment;
     void* ptr = arena->buffer + arena->offset;
     arena->offset += size;
@@ -121,7 +127,7 @@ TessResult TessCorrectRollingShutter(TessCameraFrame* frame, const float gyro_ve
     int32_t width = frame->width;
     int32_t stride = frame->stride;
 
-    if (width <= 0 || height <= 0 || stride < width) {
+    if (width <= 0 || height <= 0 || stride < width || !isfinite(gyro_velocity[1])) {
         return TESS_ERROR_INVALID_ARGUMENT;
     }
 
@@ -167,7 +173,7 @@ TessResult TessQueuePushBatch(TessLockFreeQueue* queue, const TessCommand* cmds,
         (current_head - current_tail - 1) : 
         (TESS_RING_BUFFER_SIZE - current_tail + current_head - 1);
 
-    size_t to_push = (count < available) ? count : available;
+    size_t to_push = (count < (size_t)available) ? count : (size_t)available;
     if (to_push == 0) {
         if (out_pushed) *out_pushed = 0;
         return TESS_ERROR_QUEUE_FULL;
@@ -190,7 +196,7 @@ TessResult TessQueuePushBatch(TessLockFreeQueue* queue, const TessCommand* cmds,
 typedef struct {
     uint32_t node_id;
     uint32_t type;
-    uint32_t parent_id; // Added topology linkage for full tree rebuilding
+    uint32_t parent_id;
     float transform[16];
 } TessSerializedNode;
 
@@ -203,6 +209,7 @@ typedef struct {
 } TessSafeMapContainer;
 
 static uint32_t TessComputeChecksum(const uint8_t* data, size_t bytes) {
+    if (!data || bytes == 0) return 0;
     uint32_t sum1 = 0xffff, sum2 = 0xffff;
     while (bytes) {
         size_t tlen = (bytes >= 360) ? 360 : bytes;
@@ -230,7 +237,6 @@ TessResult TessMapExport(const TessNode* root_node, const char* filepath) {
     container.version = TESS_CURRENT_VERSION;
     container.node_count = 0;
 
-    // Queue structure storing both node pointer and its parent ID for serialization topology
     typedef struct {
         const TessNode* node;
         uint32_t parent_id;
@@ -240,7 +246,7 @@ TessResult TessMapExport(const TessNode* root_node, const char* filepath) {
     size_t q_head = 0;
     size_t q_tail = 0;
 
-    queue[q_tail++] = (QueueItem){root_node, 0xFFFFFFFF}; // Root has no parent
+    queue[q_tail++] = (QueueItem){root_node, 0xFFFFFFFF};
 
     while (q_head < q_tail && container.node_count < TESS_MAX_SERIALIZED_NODES) {
         QueueItem item = queue[q_head++];
@@ -271,32 +277,34 @@ TessResult TessMapExport(const TessNode* root_node, const char* filepath) {
 
 TessResult TessMapImportAndReconstruct(TessMemoryArena* arena, const char* filepath, TessNode** out_root_node) {
     if (!arena || !filepath || !out_root_node) return TESS_ERROR_INVALID_ARGUMENT;
+    *out_root_node = NULL;
 
     FILE* file = fopen(filepath, "rb");
     if (!file) return TESS_ERROR_FILE_IO;
 
-    TessSafeMapContainer* container = (TessSafeMapContainer*)TessArenaAlloc(arena, sizeof(TessSafeMapContainer), alignof(TessSafeMapContainer));
-    if (!container) {
-        fclose(file);
-        return TESS_ERROR_OUT_OF_MEMORY;
-    }
+    // Safely load into a stack-allocated container first to prevent arena corruption on malformed I/O
+    TessSafeMapContainer temp_container;
+    memset(&temp_container, 0, sizeof(TessSafeMapContainer));
 
-    size_t read_bytes = fread(container, sizeof(TessSafeMapContainer), 1, file);
+    size_t read_bytes = fread(&temp_container, sizeof(TessSafeMapContainer), 1, file);
     fclose(file);
 
     if (read_bytes != 1) return TESS_ERROR_FILE_IO;
-    if (container->magic != TESS_MAGIC_HEADER) return TESS_ERROR_CORRUPTION;
-    if (container->version != TESS_CURRENT_VERSION) return TESS_ERROR_VERSION_MISMATCH;
-
-    size_t payload_size = container->node_count * sizeof(TessSerializedNode);
-    if (TessComputeChecksum((const uint8_t*)container->nodes, payload_size) != container->checksum) {
+    if (temp_container.magic != TESS_MAGIC_HEADER) return TESS_ERROR_CORRUPTION;
+    if (temp_container.version != TESS_CURRENT_VERSION) return TESS_ERROR_VERSION_MISMATCH;
+    if (temp_container.node_count == 0 || temp_container.node_count > TESS_MAX_SERIALIZED_NODES) {
         return TESS_ERROR_CORRUPTION;
     }
 
-    if (container->node_count == 0) {
-        *out_root_node = NULL;
-        return TESS_SUCCESS;
+    size_t payload_size = temp_container.node_count * sizeof(TessSerializedNode);
+    if (TessComputeChecksum((const uint8_t*)temp_container.nodes, payload_size) != temp_container.checksum) {
+        return TESS_ERROR_CORRUPTION;
     }
+
+    // Now safely duplicate the validated container into the memory arena
+    TessSafeMapContainer* container = (TessSafeMapContainer*)TessArenaAlloc(arena, sizeof(TessSafeMapContainer), alignof(TessSafeMapContainer));
+    if (!container) return TESS_ERROR_OUT_OF_MEMORY;
+    memcpy(container, &temp_container, sizeof(TessSafeMapContainer));
 
     // Allocate mapping table for node reconstruction
     TessNode** allocated_nodes = (TessNode**)TessArenaAlloc(arena, container->node_count * sizeof(TessNode*), alignof(TessNode*));
@@ -318,21 +326,26 @@ TessResult TessMapImportAndReconstruct(TessMemoryArena* arena, const char* filep
 
     TessNode* root = NULL;
 
-    // Rebuild tree topology
+    // Rebuild tree topology safely
     for (uint32_t i = 0; i < container->node_count; ++i) {
         uint32_t parent_id = container->nodes[i].parent_id;
         TessNode* curr = allocated_nodes[i];
 
         if (parent_id == 0xFFFFFFFF) {
+            if (root != nullptr) {
+                return TESS_ERROR_CORRUPTION; // Multiple roots detected
+            }
             root = curr;
         } else {
-            // Find parent and attach child
+            bool parent_found = false;
             for (uint32_t j = 0; j < container->node_count; ++j) {
                 if (allocated_nodes[j]->id == parent_id) {
                     TessNode* parent = allocated_nodes[j];
                     if (parent->child_count >= parent->child_capacity) {
                         size_t new_cap = parent->child_capacity == 0 ? 4 : parent->child_capacity * 2;
                         TessNode** new_children = (TessNode**)TessArenaAlloc(arena, new_cap * sizeof(TessNode*), alignof(TessNode*));
+                        if (!new_children) return TESS_ERROR_OUT_OF_MEMORY;
+
                         if (parent->children) {
                             memcpy(new_children, parent->children, parent->child_count * sizeof(TessNode*));
                         }
@@ -340,10 +353,18 @@ TessResult TessMapImportAndReconstruct(TessMemoryArena* arena, const char* filep
                         parent->child_capacity = new_cap;
                     }
                     parent->children[parent->child_count++] = curr;
+                    parent_found = true;
                     break;
                 }
             }
+            if (!parent_found) {
+                return TESS_ERROR_CORRUPTION; // Orphaned node with missing parent ID
+            }
         }
+    }
+
+    if (!root) {
+        return TESS_ERROR_CORRUPTION;
     }
 
     *out_root_node = root;
