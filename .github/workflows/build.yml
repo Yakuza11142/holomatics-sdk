@@ -1,226 +1,91 @@
-use std::alloc::{alloc, dealloc, Layout};
-use std::ffi::c_void;
-
-// Simulating raw system low-level external engine calls
-extern "C" {
-    fn System_get_raw_view_matrix() -> Matrix4;
-    fn System_get_raw_projection_matrix() -> Matrix4;
-    fn System_get_raw_camera_pose() -> Vector3;
-    fn System_get_raw_light_intensity() -> f32;
-    fn System_read_ar_plane_buffer() -> Tensor;
-    fn System_reconstruct_scene_mesh(depth_map: &Tensor) -> MeshChunk;
-    fn System_classify_objects_segmentation(depth_map: &Tensor) -> Tensor;
-    fn System_compute_vslam_trajectory(point_cloud: &Tensor) -> Vector3;
-    fn System_bind_global_geospatial_anchor(lat: f32, lon: f32, alt: f32) -> Matrix4;
-}
-
-// ----------------------------------------------------------------------------
-// C-ABI COMPATIBLE NATIVE MEMORY ALIGNMENTS & STRUCTURES
-// ----------------------------------------------------------------------------
-
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct Matrix4 {
-    pub m: [f32; 16],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct Vector3 {
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct Tensor {
-    pub data: *mut f32,
-    pub shape: [i32; 4],
-    pub dimensions: i32,
-}
-
-impl Tensor {
-    /// Safe low-level allocation frame tracking logic replacing tensor.alloc()
-    pub unsafe fn alloc(dimensions: &[i32]) -> Self {
-        let mut shape = [0; 4];
-        let mut total_elements = 1;
-        for (i, &dim) in dimensions.iter().enumerate().take(4) {
-            shape[i] = dim;
-            total_elements *= dim as usize;
-        }
-
-        // Prevent layout unwrapping panics on empty allocations
-        if total_elements == 0 {
-            total_elements = 1;
-        }
-
-        let layout = Layout::array::<f32>(total_elements).unwrap();
-        let data = alloc(layout) as *mut f32;
-        if data.is_null() {
-            panic!("Tensor Allocation Failure: Out of physical NDK memory.");
-        }
-
-        Tensor {
-            data,
-            shape,
-            dimensions: dimensions.len() as i32,
-        }
-    }
-
-    /// Explicit clean deallocation routine to prevent spatial frame memory leaks
-    pub unsafe fn free_memory(&mut self) {
-        if !self.data.is_null() {
-            let mut total_elements = 1;
-            for i in 0..(self.dimensions as usize).min(4) {
-                total_elements *= self.shape[i] as usize;
-            }
-            if total_elements == 0 { total_elements = 1; }
-            
-            let layout = Layout::array::<f32>(total_elements).unwrap();
-            dealloc(self.data as *mut u8, layout);
-            self.data = std::ptr::null_mut();
-        }
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct MeshChunk {
-    pub vertices: Tensor,
-    pub normals: Tensor,
-    pub semantic_labels: Tensor,
-}
-
-impl MeshChunk {
-    pub unsafe fn free_memory(&mut self) {
-        self.vertices.free_memory();
-        self.normals.free_memory();
-        self.semantic_labels.free_memory();
-    }
-}
-
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct ARSpatialFrame {
-    pub view_matrix: Matrix4,
-    pub projection_matrix: Matrix4,
-    pub camera_pose: Vector3,
-    pub light_intensity: f32,
-    pub detected_planes: Tensor,
-    pub spatial_mesh: MeshChunk,
-    pub depth_map: Tensor,
-    pub point_cloud: Tensor,
-}
-
-impl ARSpatialFrame {
-    pub unsafe fn free_memory(&mut self) {
-        self.detected_planes.free_memory();
-        self.spatial_mesh.free_memory();
-        self.depth_map.free_memory();
-        self.point_cloud.free_memory();
-    }
-}
-
-// ----------------------------------------------------------------------------
-// NATIVE SPATIAL BRIDGE ENGINE INTERFACES (C-LINKABLE ENTRY POINTS)
-// ----------------------------------------------------------------------------
-
-#[repr(C)]
-pub struct NativeSpatialBridge {
-    pub is_initialized: bool,
-}
-
-/// FIXED: Changed from @no_mangle to standard syntax attribute wrapper
-#[no_mangle]
-pub extern "C" fn native_spatial_bridge_init() -> NativeSpatialBridge {
-    NativeSpatialBridge { is_initialized: true }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn native_spatial_bridge_poll_frame(bridge: *const NativeSpatialBridge) -> ARSpatialFrame {
-    if bridge.is_null() || !(*bridge).is_initialized {
-        panic!("Bridge Error: Context is null or uninitialized.");
-    }
-
-    let mut depth_stream = System_get_raw_depth_stream();
-    let mut point_cloud = System_read_spatial_point_cloud();
-
-    let generated_mesh = System_reconstruct_scene_mesh(&depth_stream);
-    let segment_labels = System_classify_objects_segmentation(&depth_stream);
-    let calculated_pose = System_compute_vslam_trajectory(&point_cloud);
-
-    let frame = ARSpatialFrame {
-        view_matrix: System_get_raw_view_matrix(),
-        projection_matrix: System_get_raw_projection_matrix(),
-        camera_pose: calculated_pose,
-        light_intensity: System_get_raw_light_intensity(),
-        detected_planes: System_read_ar_plane_buffer(),
-        spatial_mesh: MeshChunk {
-            vertices: generated_mesh.vertices,
-            normals: generated_mesh.normals,
-            semantic_labels: segment_labels,
-        },
-        depth_map: depth_stream,
-        point_cloud: point_cloud,
-    };
-
-    frame
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn native_spatial_bridge_create_geospatial_anchor(
-    _bridge: *const NativeSpatialBridge, 
-    latitude: f32, 
-    longitude: f32, 
-    altitude: f32
-) -> Matrix4 {
-    System_bind_global_geospatial_anchor(latitude, longitude, altitude)
-}
-
-// ----------------------------------------------------------------------------
-// COMPONENT UI INTERACTIVE VIEW WRAPPER DECORATORS
-// ----------------------------------------------------------------------------
-
-pub trait Widget {
-    fn build(&self, ctx: *mut c_void) -> *mut c_void;
-    fn render(&self, canvas: *mut c_void);
-}
-
-pub struct ARWorldView {
-    pub bridge: NativeSpatialBridge,
-    pub child: Box<dyn Widget + Send + Sync>,
-}
-
-impl Widget for ARWorldView {
-    fn build(&self, ctx: *mut c_void) -> *mut c_void {
-        self.child.build(ctx)
-    }
-
-    fn render(&self, canvas: *mut c_void) {
-        unsafe {
-            let bridge_ptr = &self.bridge as *const NativeSpatialBridge;
-            let mut spatial = native_spatial_bridge_poll_frame(bridge_ptr);
-
-            // Forward layout render signal downstream to clear child widgets
-            self.child.render(canvas);
-
-            // Clean out the memory buffers so frame data doesn't leak into RAM
-            spatial.free_memory();
-        }
-    }
-}
-
-// ----------------------------------------------------------------------------
-// FRAMEWORK COMPILER PLACEHOLDERS (Warnings Silenced)
-// ----------------------------------------------------------------------------
-
-#[allow(non_snake_case)]
-unsafe fn System_get_raw_depth_stream() -> Tensor { 
-    Tensor::alloc(&[480, 640]) 
-}
-
-#[allow(non_snake_case)]
-unsafe fn System_read_spatial_point_cloud() -> Tensor { 
-    Tensor::alloc(&[4096, 3]) 
-}
+-name: Tesseract Engine Compiler & Shared Object Build
+-
+-on:
+  - push:
+      - branches: [ main, master ]
+  - pull_request:
+      - branches: [ main, master ]
+-
+-jobs:
+  - build-shared-library:
+      - runs-on: ubuntu-latest
+-
+      - steps:
+          - name: Checkout Codebase
+          - uses: actions/checkout@v4
+-
+          - name: Install Android NDK & Rust Toolchain Targets
+          - run: |
+              sudo apt-get update
+              sudo apt-get install -y build-essential clang llvm
+              rustup target add aarch64-linux-android
+-
+          - name: Compile Core Rust Spatial Module (tesseract_ui.rs)
+          - run: |
+              # Compile your pure Rust module directly into a high-performance static library object
+              rustc --target aarch64-linux-android -O --crate-type=staticlib tesseract_ui.rs -o libtesseract_ui.a
+-
+          - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
+          - run: |
+              # 1. Locate the pre-installed Android NDK on the runner image
+              NDK_PATH="${ANDROID_NDK_LATEST_HOME}"
+              if [ -z "$NDK_PATH" ]; then
+                NDK_PATH="${ANDROID_HOME}/ndk-bundle"
+              fi
+              
+              echo "🤖 Utilizing Android NDK located at: $NDK_PATH"
+              
+              # 2. Select the cross-compiler toolchain parameters for ARM64 Android devices
+              TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
+              CLANG_C="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
+              CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
+              
+              # 3. Explicitly link search paths to eliminate recursive path conflicts
+              INCLUDE_FLAGS="-I. -I./src"
+              
+              # 4. Gather active native C engine core modules while strictly dropping old legacy duplicate files
+              CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" \
+                ! -name "TessBridge.c" \
+                ! -name "tesseract_pro.c" \
+                ! -name "tesseract_queue.c" \
+                ! -name "tesseract_unified.c" \
+                ! -name "tesseract_core.c")
+              
+              echo "🧨 Compiling selected active C engine files:"
+              echo "$CORE_C_FILES"
+              
+              echo "🔨 Compiling loose C engine components into mobile object modules..."
+              for file in $CORE_C_FILES; do
+                if [[ "$file" == *"tesseract_concurrency.c"* ]]; then
+                  $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -DTESS_API="" -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+                else
+                  $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" -Wno-macro-redefined -Wno-error=incompatible-pointer-types "$file" -o "${file%.c}.o"
+                fi
+              done
+              
+              # 5. Compile the JNI bridge file as pure C++ to link accurately with NDK system structures
+              echo "🔨 Compiling thread-safe JNI interface layer..."
+              $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" TessBridge.c -o TessBridge.o
+              
+              # 6. Gather all newly generated active ARM64 native object files
+              OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o")
+              
+              echo "🔨 Packaging final unified shared library: libTessSDK.so"
+              # Link all valid object modules and your Rust static library into your final framework package
+              $CLANG_CC -shared -fPIC -O3 -pthread \
+                        $OBJECT_FILES -L. -ltesseract_ui \
+                        -landroid -llog \
+                        -o libTessSDK.so
+-
+          - name: Verify Exported Library Symbols
+          - run: |
+              file libTessSDK.so
+              echo "--- Exported Defined Symbols ---"
+              llvm-nm -D --defined-only libTessSDK.so
+-
+          - name: Upload Build Artifacts
+          - uses: actions/upload-artifact@v4
+          - with:
+              name: tesseract-engine-binaries
+              path: |
+                libTessSDK.so
