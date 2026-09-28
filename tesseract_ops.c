@@ -44,7 +44,7 @@ TessResult TessArenaInit(TessMemoryArena* arena, size_t capacity) {
 
 void* TessArenaAlloc(TessMemoryArena* arena, size_t size, size_t alignment) {
     if (!arena || size == 0) return NULL;
-    
+
     // Ensure alignment is a power of two
     if ((alignment & (alignment - 1)) != 0 || alignment == 0) {
         alignment = sizeof(void*);
@@ -332,7 +332,7 @@ TessResult TessMapImportAndReconstruct(TessMemoryArena* arena, const char* filep
         TessNode* curr = allocated_nodes[i];
 
         if (parent_id == 0xFFFFFFFF) {
-            if (root != nullptr) {
+            if (root != NULL) {
                 return TESS_ERROR_CORRUPTION; // Multiple roots detected
             }
             root = curr;
