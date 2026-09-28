@@ -131,13 +131,13 @@ pub struct NativeSpatialBridge {
     pub is_initialized: bool,
 }
 
-/// FIXED: Root-level entry point functions ensure pristine JNI/C symbol visibility
-@no_mangle
+/// FIXED: Changed from @no_mangle to standard syntax attribute wrapper
+#[no_mangle]
 pub extern "C" fn native_spatial_bridge_init() -> NativeSpatialBridge {
     NativeSpatialBridge { is_initialized: true }
 }
 
-@no_mangle
+#[no_mangle]
 pub unsafe extern "C" fn native_spatial_bridge_poll_frame(bridge: *const NativeSpatialBridge) -> ARSpatialFrame {
     if bridge.is_null() || !(*bridge).is_initialized {
         panic!("Bridge Error: Context is null or uninitialized.");
@@ -146,12 +146,11 @@ pub unsafe extern "C" fn native_spatial_bridge_poll_frame(bridge: *const NativeS
     let mut depth_stream = System_get_raw_depth_stream();
     let mut point_cloud = System_read_spatial_point_cloud();
 
-    // FIXED: Allocating directly from system engine calls to avoid leaking temporary allocations
     let generated_mesh = System_reconstruct_scene_mesh(&depth_stream);
-    let mut segment_labels = System_classify_objects_segmentation(&depth_stream);
+    let segment_labels = System_classify_objects_segmentation(&depth_stream);
     let calculated_pose = System_compute_vslam_trajectory(&point_cloud);
 
-    let mut frame = ARSpatialFrame {
+    let frame = ARSpatialFrame {
         view_matrix: System_get_raw_view_matrix(),
         projection_matrix: System_get_raw_projection_matrix(),
         camera_pose: calculated_pose,
@@ -169,7 +168,7 @@ pub unsafe extern "C" fn native_spatial_bridge_poll_frame(bridge: *const NativeS
     frame
 }
 
-@no_mangle
+#[no_mangle]
 pub unsafe extern "C" fn native_spatial_bridge_create_geospatial_anchor(
     _bridge: *const NativeSpatialBridge, 
     latitude: f32, 
@@ -206,7 +205,7 @@ impl Widget for ARWorldView {
             // Forward layout render signal downstream to clear child widgets
             self.child.render(canvas);
 
-            // FIXED: Clean out the memory buffers so frame data doesn't leak into RAM
+            // Clean out the memory buffers so frame data doesn't leak into RAM
             spatial.free_memory();
         }
     }
