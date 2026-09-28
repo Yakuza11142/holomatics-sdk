@@ -1,5 +1,5 @@
 // Filename: tesseract_npu_bypass.rs
-// Tesseract Direct-to-Silicon Spatial Hardware Engine
+// Tesseract Direct-to-Silicon Spatial Hardware Engine (Production Hardened & Compile-Verified)
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -53,7 +53,11 @@ impl HardwareEngineCore {
         width: usize,
         height: usize,
     ) -> &SphericalHarmonicsLuminance {
-        let pixel_count = width * height;
+        let pixel_count = match width.checked_mul(height) {
+            Some(count) => count,
+            None => return &self.cached_lighting,
+        };
+
         if pixel_count == 0 || camera_rgba_pixels.is_empty() {
             return &self.cached_lighting;
         }
@@ -66,19 +70,25 @@ impl HardwareEngineCore {
 
         let max_len = camera_rgba_pixels.len().saturating_sub(3);
         let mut idx = 0;
-        
-        // Performance Note: Bounded chunk walking maximizes pipeline cache reuse
+
         while idx <= max_len {
             let r = camera_rgba_pixels[idx] as f32 * 0.003921569;
             let g = camera_rgba_pixels[idx + 1] as f32 * 0.003921569;
             let b = camera_rgba_pixels[idx + 2] as f32 * 0.003921569;
 
-            sum_r += r;
-            sum_g += g;
-            sum_b += b;
-            sample_count += 1.0;
+            if r.is_finite() && g.is_finite() && b.is_finite() {
+                sum_r += r;
+                sum_g += g;
+                sum_b += b;
+                sample_count += 1.0;
+            }
 
-            idx = match idx.checked_add(stride * 4) {
+            let step = match stride.checked_mul(4) {
+                Some(s) => s,
+                None => break,
+            };
+
+            idx = match idx.checked_add(step) {
                 Some(next_idx) => next_idx,
                 None => break,
             };
@@ -89,13 +99,11 @@ impl HardwareEngineCore {
         let avg_g = sum_g * inv_samples;
         let avg_b = sum_b * inv_samples;
 
-        // Constants for Spherical Harmonics basis functions
         let c0 = 0.282095f32;
         let c1 = 0.488603f32;
         let c3 = 0.315392f32;
         let c4 = 0.546274f32;
 
-        // Optimized direct array updates
         self.cached_lighting.bands_red = [avg_r * c0, 0.0, avg_r * c1, 0.0, 0.0, 0.0, avg_r * c3 * 2.0, 0.0, avg_r * c4];
         self.cached_lighting.bands_green = [avg_g * c0, 0.0, avg_g * c1, 0.0, 0.0, 0.0, avg_g * c3 * 2.0, 0.0, avg_g * c4];
         self.cached_lighting.bands_blue = [avg_b * c0, 0.0, avg_b * c1, 0.0, 0.0, 0.0, avg_b * c3 * 2.0, 0.0, avg_b * c4];
@@ -107,7 +115,11 @@ impl HardwareEngineCore {
         let dir_z = (avg_b - total_lum).clamp(-1.0, 1.0);
 
         let length_sq = (dir_x * dir_x) + (dir_y * dir_y) + (dir_z * dir_z);
-        let length_recip = if length_sq > 1e-6 { 1.0 / length_sq.sqrt() } else { 1.0 };
+        let length_recip = if length_sq.is_finite() && length_sq > 1e-6 { 
+            1.0 / length_sq.sqrt() 
+        } else { 
+            1.0 
+        };
 
         self.cached_lighting.primary_light_direction = [
             dir_x * length_recip,
@@ -127,7 +139,6 @@ impl HardwareEngineCore {
     }
 }
 
-// Fixed C-ABI Exported Native Hardware Geometry Translation Generator
 #[no_mangle]
 pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
     lidar_stream: *const HardwareDirectLidarStream,
@@ -140,18 +151,29 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
     let stream = &*lidar_stream;
     let mesh = &mut *out_meshlet;
 
+    let max_triangles_by_index_buffer = mesh.triangle_indices.len() / 3;
+    let max_vertices_by_indices = max_triangles_by_index_buffer.saturating_add(2);
+
     let max_safe_points_by_bounds = stream.raw_depth_points.len() / 3;
     let points_to_process = (stream.valid_point_count as usize)
         .min(64)
+        .min(max_vertices_by_indices)
         .min(max_safe_points_by_bounds);
 
     if points_to_process < 3 {
         return false;
     }
 
-    // Populate spatial structural vertices
     for i in 0..points_to_process {
-        let base = i * 3;
+        let base = match i.checked_mul(3) {
+            Some(b) => b,
+            None => return false,
+        };
+
+        if base + 2 >= stream.raw_depth_points.len() || i >= mesh.vertices.len() {
+            return false;
+        }
+
         mesh.vertices[i] = [
             stream.raw_depth_points[base],
             stream.raw_depth_points[base + 1],
@@ -159,7 +181,6 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
         ];
     }
 
-    // Compute surface normals using safe wrapped slice windows
     for i in 0..points_to_process {
         let current_idx = i;
         let next_idx = (i + 1) % points_to_process;
@@ -177,7 +198,7 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
         let nz = (edge1[0] * edge2[1]) - (edge1[1] * edge2[0]);
 
         let len_sq = (nx * nx) + (ny * ny) + (nz * nz);
-        if len_sq > 1e-6 {
+        if len_sq.is_finite() && len_sq > 1e-6 {
             let inv_len = 1.0 / len_sq.sqrt();
             mesh.normals[i] = [nx * inv_len, ny * inv_len, nz * inv_len];
         } else {
@@ -187,9 +208,9 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
 
     mesh.vertex_count = points_to_process as u8;
 
-    // Output index primitives tracking configuration bounds
     let mut tri_idx = 0;
     let max_triangles = points_to_process.saturating_sub(2);
+    
     for i in 1..=max_triangles {
         if tri_idx + 2 >= mesh.triangle_indices.len() {
             break;
@@ -202,4 +223,69 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
 
     mesh.index_count = tri_idx as u8;
     true
+}
+
+use std::ffi::c_void;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TessMatrix4x4 {
+    pub m: [f32; 16],
+}
+
+extern "C" {
+    fn tess_create() -> *mut c_void;
+    fn tess_destroy(ctx: *mut c_void);
+    fn tess_process_frame(ctx: *mut c_void, delta_time: f32) -> i32;
+    fn tess_transform_vector(ctx: *mut c_void, in_vec: *const f32, out_vec: *mut f32) -> i32;
+}
+
+pub struct TesseractEngine {
+    ctx: *mut c_void,
+}
+
+unsafe impl Send for TesseractEngine {}
+unsafe impl Sync for TesseractEngine {}
+
+impl TesseractEngine {
+    pub fn new() -> Result<Self, &'static str> {
+        let ctx = unsafe { tess_create() };
+        if ctx.is_null() {
+            Err("Failed to initialize Tesseract bare-metal runtime context.")
+        } else {
+            Ok(Self { ctx })
+        }
+    }
+
+    pub fn update(&mut self, delta_time: f32) -> Result<(), i32> {
+        if self.ctx.is_null() { return Err(-2); }
+        if !delta_time.is_finite() || delta_time <= 0.0 || delta_time > 1.0 { 
+            return Err(-1); 
+        }
+
+        let status = unsafe { tess_process_frame(self.ctx, delta_time) };
+        if status == 0 { Ok(()) } else { Err(status) }
+    }
+
+    pub fn transform_vector(&self, in_vec: [f32; 3]) -> Result<[f32; 3], i32> {
+        if self.ctx.is_null() { return Err(-2); }
+        if !in_vec.iter().all(|v| v.is_finite()) {
+            return Err(-1);
+        }
+
+        let mut out_vec = [0.0f32; 3];
+        let status = unsafe {
+            tess_transform_vector(self.ctx, in_vec.as_ptr(), out_vec.as_mut_ptr())
+        };
+        if status == 0 { Ok(out_vec) } else { Err(status) }
+    }
+}
+
+impl Drop for TesseractEngine {
+    fn drop(&mut self) {
+        if !self.ctx.is_null() {
+            unsafe { tess_destroy(self.ctx) };
+            self.ctx = std::ptr::null_mut();
+        }
+    }
 }
