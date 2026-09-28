@@ -1,41 +1,56 @@
-# ====================================================================
-# TessSDK Spatial Engine - MAX AGGRESSIVE PROGUARD CONFIGURATION
-# ====================================================================
-
-# 1. Core JNI Security Guard (DO NOT TOUCH)
-# We MUST keep the names of classes that contain native methods so the .so file can link to them.
--keepclasseswithmembernames class * {
-    native <methods>;
-}
--keep class com.tesseract.ui.** {
-    native <methods>;
+plugins {
+    id 'com.android.library'
 }
 
-# 2. Maximum Obfuscation & Repackaging Engines
-# Flattens your entire package hierarchy into a single, confusing root folder
--repackageclasses 'a'
--allowaccessmodification
+android {
+    // 1. NAMESPACE BINDING: Must match your native JNI C++ function bindings exactly
+    namespace 'com.tesseract.ui'
+    compileSdk 34
 
-# Use aggressive, short variable and class name recycling (a, b, c...)
--dontusemixedcaseclassnames
+    defaultConfig {
+        // 2. KERNEL REQUIREMENT: Set to API 29 because the engine uses Linux 'memfd_create'
+        minSdk 29
+        targetSdk 34
 
-# 3. Aggressive Code Stripping
-# Permanently delete all debugging metadata, source file names, and line numbers
--renamesourcefileattribute SourceFile
--keepattributes !SourceFile,!LineNumberTable,*Annotation*,Signature,EnclosingMethod,InnerClasses
+        ndk {
+            // 3. UNIVERSAL ARCHITECTURES: Compiles binaries for modern 64-bit phones, 
+            // legacy 32-bit devices, and PC-based testing emulators.
+            abiFilters 'arm64-v8a', 'x86_64', 'armeabi-v7a', 'x86'
+        }
 
-# 4. Maximum Optimization Passes
-# Run the dead-code stripping engine 10 times consecutively instead of 5
--optimizationpasses 10
+        externalNativeBuild {
+            cmake {
+                // 4. PERFORMANCE TUNING: Applies aggressive -O3 loop optimizations 
+                // and -flto (Link-Time Optimization) across both C math and C++ modules.
+                cFlags "-O3 -flto"
+                cppFlags "-std=c++17 -O3 -flto"
+                arguments "-DANDROID_STL=c++_shared"
+            }
+        }
+    }
 
-# 5. Dangerous/Maximum Optimizations (Enabled)
-# Allows ProGuard to merge classes and make radical optimizations to reduce space
--assumenosideeffects class android.util.Log {
-    public static boolean isLoggable(java.lang.String, int);
-    public static int v(...);
-    public static int d(...);
+    buildTypes {
+        release {
+            // 5. MAXIMUM SHRINKING: Enables total Java minification and dead-code stripping
+            minifyEnabled true
+            
+            // Note: 'shrinkResources' is omitted here because it is not supported 
+            // in standalone Android library modules—only in application modules.
+            
+            // References your aggressive obfuscation rule file
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
 }
 
-# 6. Toolchain Warning Suppression
--dontwarn com.android.tools.lint.**
--dontwarn com.android.tools.build.**
+dependencies {
+    // Heavy local tools have been permanently stripped.
+    // Add lightweight, standard runtime dependencies here only if needed.
+}
