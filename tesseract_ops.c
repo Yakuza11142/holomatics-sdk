@@ -1,3 +1,9 @@
+/*
+ * File: tesseract_ops.c
+ * Target: Universal High-Performance Spatial & Robotic Operations Engine[span_5](start_span)[span_5](end_span)
+ * Features: Arena Allocator, Lock-Free Batch Queue, Rolling Shutter Correction, Safe Serialization[span_6](start_span)[span_6](end_span).
+ */
+
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdatomic.h>
@@ -10,7 +16,7 @@
 #define TESS_RING_BUFFER_SIZE 256
 #define TESS_RING_BUFFER_MASK (TESS_RING_BUFFER_SIZE - 1)
 #define TESS_MAX_SERIALIZED_NODES 1024
-#define TESS_MAGIC_HEADER 0x54455353 // "TESS"
+#define TESS_MAGIC_HEADER 0x54455353 // "TESS[span_7](start_span)"[span_7](end_span)
 #define TESS_CURRENT_VERSION 3
 
 typedef enum {
@@ -45,7 +51,6 @@ TessResult TessArenaInit(TessMemoryArena* arena, size_t capacity) {
 void* TessArenaAlloc(TessMemoryArena* arena, size_t size, size_t alignment) {
     if (!arena || size == 0) return NULL;
 
-    // Ensure alignment is a power of two
     if ((alignment & (alignment - 1)) != 0 || alignment == 0) {
         alignment = sizeof(void*);
     }
@@ -55,7 +60,7 @@ void* TessArenaAlloc(TessMemoryArena* arena, size_t size, size_t alignment) {
     size_t adjustment = misalignment ? (alignment - misalignment) : 0;
 
     if (arena->offset + adjustment + size > arena->capacity) {
-        return NULL; // Out of Arena memory
+        return NULL;
     }
 
     arena->offset += adjustment;
@@ -282,7 +287,6 @@ TessResult TessMapImportAndReconstruct(TessMemoryArena* arena, const char* filep
     FILE* file = fopen(filepath, "rb");
     if (!file) return TESS_ERROR_FILE_IO;
 
-    // Safely load into a stack-allocated container first to prevent arena corruption on malformed I/O
     TessSafeMapContainer temp_container;
     memset(&temp_container, 0, sizeof(TessSafeMapContainer));
 
@@ -301,12 +305,10 @@ TessResult TessMapImportAndReconstruct(TessMemoryArena* arena, const char* filep
         return TESS_ERROR_CORRUPTION;
     }
 
-    // Now safely duplicate the validated container into the memory arena
     TessSafeMapContainer* container = (TessSafeMapContainer*)TessArenaAlloc(arena, sizeof(TessSafeMapContainer), alignof(TessSafeMapContainer));
     if (!container) return TESS_ERROR_OUT_OF_MEMORY;
     memcpy(container, &temp_container, sizeof(TessSafeMapContainer));
 
-    // Allocate mapping table for node reconstruction
     TessNode** allocated_nodes = (TessNode**)TessArenaAlloc(arena, container->node_count * sizeof(TessNode*), alignof(TessNode*));
     if (!allocated_nodes) return TESS_ERROR_OUT_OF_MEMORY;
 
@@ -326,14 +328,13 @@ TessResult TessMapImportAndReconstruct(TessMemoryArena* arena, const char* filep
 
     TessNode* root = NULL;
 
-    // Rebuild tree topology safely
     for (uint32_t i = 0; i < container->node_count; ++i) {
         uint32_t parent_id = container->nodes[i].parent_id;
         TessNode* curr = allocated_nodes[i];
 
         if (parent_id == 0xFFFFFFFF) {
             if (root != NULL) {
-                return TESS_ERROR_CORRUPTION; // Multiple roots detected
+                return TESS_ERROR_CORRUPTION;
             }
             root = curr;
         } else {
@@ -358,7 +359,7 @@ TessResult TessMapImportAndReconstruct(TessMemoryArena* arena, const char* filep
                 }
             }
             if (!parent_found) {
-                return TESS_ERROR_CORRUPTION; // Orphaned node with missing parent ID
+                return TESS_ERROR_CORRUPTION;
             }
         }
     }
