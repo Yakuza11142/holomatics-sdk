@@ -11,13 +11,27 @@
 #include <string.h>
 #include <stdlib.h>
 
+// Include engine header for TessMatrix4x4 and core types
+#if __has_include("tesseract_engine.h")
+#include "tesseract_engine.h"
+#elif __has_include("src/tesseract_engine.h")
+#include "src/tesseract_engine.h"
+#else
+// Guard against duplicate definition if header isn't available
+#ifndef TESS_MATRIX4X4_DEFINED
+#define TESS_MATRIX4X4_DEFINED
 typedef struct { float m[16]; } TessMatrix4x4;
+#endif
+#endif
 
+#ifndef TESS_RENDER_COMMAND_DEFINED
+#define TESS_RENDER_COMMAND_DEFINED
 typedef struct {
     uint32_t command_id;
     float delta_time;
     TessMatrix4x4 payload_matrix;
 } TessRenderCommand;
+#endif
 
 typedef struct {
     TessRenderCommand command;
@@ -31,6 +45,17 @@ typedef struct {
     _Alignas(64) _Atomic uint32_t enqueue_pos;
     _Alignas(64) _Atomic uint32_t dequeue_pos;
 } TessAdvancedMPMCQueue;
+
+/**
+ * Universal aligned memory allocation helper for NDK & POSIX portability.
+ */
+static void* tess_aligned_alloc(size_t alignment, size_t size) {
+    void* ptr = NULL;
+    if (posix_memalign(&ptr, alignment, size) != 0) {
+        return NULL;
+    }
+    return ptr;
+}
 
 /**
  * Dynamically instantiates and initializes the MPMC queue with runtime-configured capacity.
@@ -48,7 +73,7 @@ TessAdvancedMPMCQueue* tess_mpmc_queue_create(size_t requested_capacity) {
     TessAdvancedMPMCQueue* q = (TessAdvancedMPMCQueue*)malloc(sizeof(TessAdvancedMPMCQueue));
     if (!q) return NULL;
 
-    q->buffer = (TessQueueSlot*)aligned_alloc(64, cap * sizeof(TessQueueSlot));
+    q->buffer = (TessQueueSlot*)tess_aligned_alloc(64, cap * sizeof(TessQueueSlot));
     if (!q->buffer) {
         free(q);
         return NULL;
