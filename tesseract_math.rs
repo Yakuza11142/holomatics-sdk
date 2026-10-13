@@ -1,3 +1,6 @@
+// Filename: tesseract_math.rs
+// Universal High-Performance Spatial Math & Linear Algebra Engine
+
 pub mod tesseract_math {
 
     // ----------------------------------------------------------------------------
@@ -10,7 +13,7 @@ pub mod tesseract_math {
     }
 
     impl Vector2 {
-        #[inline]
+        #[inline(always)]
         pub const fn new(x: f32, y: f32) -> Self {
             Self { x, y }
         }
@@ -26,32 +29,32 @@ pub mod tesseract_math {
     impl Vector3 {
         pub const ZERO: Self = Self { x: 0.0, y: 0.0, z: 0.0 };
 
-        #[inline]
+        #[inline(always)]
         pub const fn new(x: f32, y: f32, z: f32) -> Self {
             Self { x, y, z }
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn add(self, rhs: Self) -> Self {
             Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn sub(self, rhs: Self) -> Self {
             Self::new(self.x - rhs.x, self.y - rhs.y, self.z - rhs.z)
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn scale(self, factor: f32) -> Self {
             Self::new(self.x * factor, self.y * factor, self.z * factor)
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn dot(self, rhs: Self) -> f32 {
             self.x * rhs.x + self.y * rhs.y + self.z * rhs.z
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn cross(self, rhs: Self) -> Self {
             Self::new(
                 self.y * rhs.z - self.z * rhs.y,
@@ -70,7 +73,7 @@ pub mod tesseract_math {
     }
 
     impl Vector4 {
-        #[inline]
+        #[inline(always)]
         pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
             Self { x, y, z, w }
         }
@@ -85,7 +88,7 @@ pub mod tesseract_math {
     }
 
     impl Plane3D {
-        #[inline]
+        #[inline(always)]
         pub const fn new(a: f32, b: f32, c: f32, d: f32) -> Self {
             Self { a, b, c, d }
         }
@@ -109,7 +112,7 @@ pub mod tesseract_math {
             m: [[0.0; 3]; 3],
         };
 
-        #[inline]
+        #[inline(always)]
         pub fn mul_vec3(&self, v: Vector3) -> Vector3 {
             Vector3::new(
                 self.m[0][0] * v.x + self.m[0][1] * v.y + self.m[0][2] * v.z,
@@ -118,7 +121,7 @@ pub mod tesseract_math {
             )
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn transpose(&self) -> Self {
             Self {
                 m: [
@@ -129,7 +132,7 @@ pub mod tesseract_math {
             }
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn mul(&self, rhs: &Self) -> Self {
             let mut out = Self::ZERO;
             for i in 0..3 {
@@ -142,14 +145,14 @@ pub mod tesseract_math {
             out
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn determinant(&self) -> f32 {
             self.m[0][0] * (self.m[1][1] * self.m[2][2] - self.m[1][2] * self.m[2][1])
                 - self.m[0][1] * (self.m[1][0] * self.m[2][2] - self.m[1][2] * self.m[2][0])
                 + self.m[0][2] * (self.m[1][0] * self.m[2][1] - self.m[1][1] * self.m[2][0])
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn apply_jacobi(&self, i: usize, j: usize, c: f32, s: f32) -> Self {
             let mut out = *self;
             for row in 0..3 {
@@ -177,8 +180,8 @@ pub mod tesseract_math {
             ],
         };
 
-        #[inline]
-        pub fn from_r_t(r: Matrix3, t: Vector3) -> Self {
+        #[inline(always)]
+        pub const fn from_r_t(r: Matrix3, t: Vector3) -> Self {
             Self {
                 m: [
                     [r.m[0][0], r.m[0][1], r.m[0][2], t.x],
@@ -189,7 +192,7 @@ pub mod tesseract_math {
             }
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn mul_vec4(&self, v: Vector4) -> Vector4 {
             Vector4::new(
                 self.m[0][0] * v.x + self.m[0][1] * v.y + self.m[0][2] * v.z + self.m[0][3] * v.w,
@@ -199,7 +202,7 @@ pub mod tesseract_math {
             )
         }
 
-        #[inline]
+        #[inline(always)]
         pub fn mul(&self, rhs: &Self) -> Self {
             let mut out = [[0.0; 4]; 4];
             for i in 0..4 {
@@ -214,8 +217,7 @@ pub mod tesseract_math {
         }
     }
 
-    // Pseudo-random generator helper for RANSAC logic
-    #[inline]
+    #[inline(always)]
     fn pseudo_random_int(seed: &mut u32, min: usize, max: usize) -> usize {
         if max <= min {
             return min;
@@ -228,6 +230,7 @@ pub mod tesseract_math {
     // ----------------------------------------------------------------------------
     // 1. RANSAC, DISTORTION, AND MATRIX GUARDS
     // ----------------------------------------------------------------------------
+    #[inline(always)]
     pub fn tess_fit_plane_ransac(points: &[Vector3], iter: i32, thresh: f32) -> Plane3D {
         let mut best_plane = Plane3D::new(0.0, 0.0, 1.0, 0.0);
         let mut max_inliers = 0;
@@ -264,7 +267,11 @@ pub mod tesseract_math {
             let len_sq = norm.dot(norm);
 
             if len_sq > 0.0001 {
-                norm = norm.scale(1.0 / len_sq.sqrt());
+                let inv_len = 1.0 / len_sq.sqrt();
+                if !inv_len.is_finite() {
+                    continue;
+                }
+                norm = norm.scale(inv_len);
                 let d = -norm.dot(p1);
                 let mut inliers = 0;
 
@@ -286,6 +293,7 @@ pub mod tesseract_math {
         best_plane
     }
 
+    #[inline(always)]
     pub fn tess_correct_lens_distortion(
         u: f32,
         v: f32,
@@ -298,6 +306,10 @@ pub mod tesseract_math {
         p1: f32,
         p2: f32,
     ) -> Vector2 {
+        if fx.abs() < 1e-6 || fy.abs() < 1e-6 {
+            return Vector2::new(u, v);
+        }
+
         let x_dist = (u - cx) / fx;
         let y_dist = (v - cy) / fy;
         let mut x = x_dist;
@@ -317,19 +329,18 @@ pub mod tesseract_math {
         Vector2::new((x * fx) + cx, (y * fy) + cy)
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn tess_transform_point_safe(pt: Vector3, mat: Matrix4, fallback_pt: Vector3) -> Vector3 {
-        if pt.x.is_nan() || pt.y.is_nan() || pt.z.is_nan() {
+        if !pt.x.is_finite() || !pt.y.is_finite() || !pt.z.is_finite() {
             return fallback_pt;
         }
 
         let res = mat.mul_vec4(Vector4::new(pt.x, pt.y, pt.z, 1.0));
 
-        if res.x.is_nan()
-            || res.y.is_nan()
-            || res.z.is_nan()
-            || res.w.is_nan()
-            || res.w.is_infinite()
+        if !res.x.is_finite()
+            || !res.y.is_finite()
+            || !res.z.is_finite()
+            || !res.w.is_finite()
             || res.w.abs() < 0.00001
         {
             return fallback_pt;
@@ -341,6 +352,7 @@ pub mod tesseract_math {
     // ----------------------------------------------------------------------------
     // 2. HARDENED SINGULAR VALUE DECOMPOSITION (SVD 3x3 Engine)
     // ----------------------------------------------------------------------------
+    #[inline(always)]
     pub fn tess_solve_svd3x3(mat: &mut Matrix3, out_u: &mut Matrix3, out_v: &mut Matrix3) {
         *out_u = Matrix3::IDENTITY;
         *out_v = Matrix3::IDENTITY;
@@ -355,14 +367,13 @@ pub mod tesseract_math {
 
                     let h = mat.m[i][i] - mat.m[j][j];
                     let r = (4.0 * p * p + h * h).sqrt();
-                    let mut c = 1.0;
-                    let mut s = 0.0;
-
-                    if r > 0.00001 {
-                        c = ((r + h.abs()) / (2.0 * r)).sqrt();
-                        let sign = if h >= 0.0 { 1.0 } else { -1.0 };
-                        s = sign * p / (r * c);
+                    if !r.is_finite() || r < 0.00001 {
+                        continue;
                     }
+
+                    let c = ((r + h.abs()) / (2.0 * r)).sqrt();
+                    let sign = if h >= 0.0 { 1.0 } else { -1.0 };
+                    let s = sign * p / (r * c);
 
                     *mat = mat.apply_jacobi(i, j, c, s);
                     *out_u = out_u.apply_jacobi(i, j, c, s);
@@ -374,6 +385,7 @@ pub mod tesseract_math {
     // ----------------------------------------------------------------------------
     // 3. CACHE-LOCALIZED ITERATIVE CLOSEST POINT (ICP Alignment Pipeline)
     // ----------------------------------------------------------------------------
+    #[inline(always)]
     pub fn tess_align_icp(
         src_points: &mut [Vector3],
         dst_points: &[Vector3],
@@ -382,25 +394,24 @@ pub mod tesseract_math {
         let mut accum_transform = Matrix4::IDENTITY;
         let count = src_points.len();
 
-        if count == 0 || count != dst_points.len() {
+        if count == 0 || count != dst_points.len() || max_iter <= 0 {
             return accum_transform;
         }
+
+        let scale = 1.0 / (count as f32);
 
         for _iter in 0..max_iter {
             let mut src_centroid = Vector3::ZERO;
             let mut dst_centroid = Vector3::ZERO;
 
-            // Step A: Linear spatial means
             for i in 0..count {
                 src_centroid = src_centroid.add(src_points[i]);
                 dst_centroid = dst_centroid.add(dst_points[i]);
             }
 
-            let scale = 1.0 / (count as f32);
             src_centroid = src_centroid.scale(scale);
             dst_centroid = dst_centroid.scale(scale);
 
-            // Step B: Build Covariance Cross-Product matrix
             let mut h_mat = Matrix3::ZERO;
             for i in 0..count {
                 let s_norm = src_points[i].sub(src_centroid);
@@ -419,12 +430,10 @@ pub mod tesseract_math {
                 h_mat.m[2][2] += s_norm.z * d_norm.z;
             }
 
-            // Step C: Unpack spatial constraints using SVD solver
             let mut u = Matrix3::IDENTITY;
             let mut v = Matrix3::IDENTITY;
             tess_solve_svd3x3(&mut h_mat, &mut u, &mut v);
 
-            // Step D: Extract pure orthogonal rotation and handle reflections
             let mut r = v.mul(&u.transpose());
             if r.determinant() < 0.0 {
                 v.m[0][2] = -v.m[0][2];
@@ -433,12 +442,10 @@ pub mod tesseract_math {
                 r = v.mul(&u.transpose());
             }
 
-            // Step E: Compute rigid translation offsets and frame delta transforms
             let t = dst_centroid.sub(r.mul_vec3(src_centroid));
             let step_transform = Matrix4::from_r_t(r, t);
             accum_transform = step_transform.mul(&accum_transform);
 
-            // Step F: Apply frame transform to mutably referenced source point cloud
             for i in 0..count {
                 src_points[i] = tess_transform_point_safe(
                     src_points[i],
