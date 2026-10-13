@@ -1,65 +1,115 @@
+/*
+ * File: tesseract_pro.c
+ * Target: Universal High-Performance Spatial & Robotic Pro Operations Engine[span_1](start_span)[span_1](end_span)
+ * Features: Ticket-Based MPMC Lock-Free Queue, Checksum-Verified Serialization, Rolling Shutter Correction[span_2](start_span)[span_2](end_span).
+ */
+
 #include "tesseract_unified.h"
-#include <stdio.h>  // FIX: Added missing header to resolve unknown type name 'FILE' errors completely
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <stdatomic.h>
+#include <stdbool.h>
+#include <stdalign.h>
 
 #define RING_BUFFER_SIZE 256
+#define RING_BUFFER_MASK (RING_BUFFER_SIZE - 1)
 #define MAX_SERIALIZED_NODES 1024
+#define TESS_MAGIC_HEADER 0x54455353 // "TESS[span_3](start_span)"[span_3](end_span)
+#define TESS_CURRENT_VERSION 3
 
-// Thread-Safe Lock-Free Single-Producer Single-Consumer Queue
+// Hardware Cache-Line Isolated Queue Slot for MPMC Concurrency
 typedef struct {
-    TessCommand buffer[RING_BUFFER_SIZE];
-    _Atomic uint32_t head;
-    _Atomic uint32_t tail;
+    TessCommand command;
+    alignas(64) atomic_uint sequence;
+} TessQueueSlot;
+
+typedef struct {
+    alignas(64) TessQueueSlot buffer[RING_BUFFER_SIZE];
+    alignas(64) atomic_uint enqueue_pos;
+    alignas(64) atomic_uint dequeue_pos;
 } TessLockFreeQueue;
 
-// Map Persistence Structure
+// Map Persistence Structure with Checksum Protection
 typedef struct __attribute__((packed)) {
     uint32_t node_id;
     uint32_t type;
+    uint32_t parent_id;
     float transform[16];
 } TessSerializedNode;
 
 typedef struct {
-    uint32_t magic; // 0x54455353 ('TESS')
+    uint32_t magic;
     uint32_t version;
     uint32_t node_count;
+    uint32_t checksum;
     TessSerializedNode nodes[MAX_SERIALIZED_NODES];
 } TessMapHeader;
 
 // ==========================================
-// 1. THREAD-SAFE CONCURRENCY (FFI INTEGRATION)
+// 1. TICKET-BASED MPMC LOCK-FREE CONCURRENCY
 // ==========================================
+
+TESS_API int32_t tesseract_queue_init_native(TessLockFreeQueue* q) {
+    if (!q) return -1;
+    for (size_t i = 0; i < RING_BUFFER_SIZE; ++i) {
+        atomic_init(&q->buffer[i].sequence, (uint32_t)i);
+        memset(&q->buffer[i].command, 0, sizeof(TessCommand));
+    }
+    atomic_init(&q->enqueue_pos, 0);
+    atomic_init(&q->dequeue_pos, 0);
+    return 0;
+}
 
 TESS_API int32_t tess_queue_push_async(TessLockFreeQueue* q, const TessCommand* cmd) {
     if (!q || !cmd) return -1;
 
-    uint32_t current_tail = atomic_load_explicit(&q->tail, memory_order_relaxed);
-    uint32_t next_tail = (current_tail + 1) % RING_BUFFER_SIZE;
+    uint32_t pos = atomic_load_explicit(&q->enqueue_pos, memory_order_relaxed);
+    for (;;) {
+        TessQueueSlot* slot = &q->buffer[pos & RING_BUFFER_MASK];
+        uint32_t seq = atomic_load_explicit(&slot->sequence, memory_order_acquire);
+        int32_t diff = (int32_t)seq - (int32_t)pos;
 
-    if (next_tail == atomic_load_explicit(&q->head, memory_order_acquire)) {
-        return -2; // Queue Full
+        if (diff == 0) {
+            if (atomic_compare_exchange_weak_explicit(
+                &q->enqueue_pos, &pos, pos + 1,
+                memory_order_relaxed, memory_order_relaxed)) {
+                slot->command = *cmd;
+                atomic_store_explicit(&slot->sequence, pos + 1, memory_order_release);
+                return 0; // Success
+            }
+        } else if (diff < 0) {
+            return -2; // Queue Full
+        } else {
+            pos = atomic_load_explicit(&q->enqueue_pos, memory_order_relaxed);
+        }
     }
-
-    q->buffer[current_tail] = *cmd;
-    atomic_store_explicit(&q->tail, next_tail, memory_order_release);
-    return 0;
 }
 
 TESS_API int32_t tess_queue_pop_main_thread(TessLockFreeQueue* q, TessCommand* out_cmd) {
     if (!q || !out_cmd) return -1;
 
-    uint32_t current_head = atomic_load_explicit(&q->head, memory_order_relaxed);
+    uint32_t pos = atomic_load_explicit(&q->dequeue_pos, memory_order_relaxed);
+    for (;;) {
+        TessQueueSlot* slot = &q->buffer[pos & RING_BUFFER_MASK];
+        uint32_t seq = atomic_load_explicit(&slot->sequence, memory_order_acquire);
+        int32_t diff = (int32_t)seq - (int32_t)(pos + 1);
 
-    if (current_head == atomic_load_explicit(&q->tail, memory_order_acquire)) {
-        return -2; // Queue Empty
+        if (diff == 0) {
+            if (atomic_compare_exchange_weak_explicit(
+                &q->dequeue_pos, &pos, pos + 1,
+                memory_order_relaxed, memory_order_relaxed)) {
+                *out_cmd = slot->command;
+                atomic_store_explicit(&slot->sequence, pos + RING_BUFFER_SIZE + 1, memory_order_release);
+                return 0; // Success
+            }
+        } else if (diff < 0) {
+            return -2; // Queue Empty
+        } else {
+            pos = atomic_load_explicit(&q->dequeue_pos, memory_order_relaxed);
+        }
     }
-
-    *out_cmd = q->buffer[current_head];
-    atomic_store_explicit(&q->head, (current_head + 1) % RING_BUFFER_SIZE, memory_order_release);
-    return 0;
 }
 
 // ==========================================
@@ -77,28 +127,47 @@ TESS_API void tess_correct_rolling_shutter(
     int w = frame->width;
     int stride = frame->stride;
 
-    // Compensate horizontal row displacement caused by yaw/pitch angular velocity
+    if (w <= 0 || h <= 0 || stride < w || !isfinite(gyro_velocity[1])) return;
+
+    const float gyro_scale = gyro_velocity[1] * readout_time_seconds * 100.0f / (float)h;
+
     for (int y = 0; y < h; y++) {
-        float row_progress = (float)y / (float)h;
-        float time_offset = row_progress * readout_time_seconds;
+        int dx = (int)((float)y * gyro_scale);
+        if (dx == 0) continue;
 
-        int dx = (int)(gyro_velocity[1] * time_offset * 100.0f); // Yaw correction
+        uint8_t* row_ptr = (uint8_t*)&frame->y_plane[y * stride];
 
-        if (dx != 0) {
-            // FIX: Added explicit uint8_t* type-cast modifier to bypass qualifier stripping errors cleanly
-            uint8_t* row = (uint8_t*)&frame->y_plane[y * stride];
-            if (dx > 0 && dx < w) {
-                memmove(row + dx, row, w - dx);
-            } else if (dx < 0 && -dx < w) {
-                memmove(row, row - dx, w + dx);
-            }
+        if (dx > 0 && dx < w) {
+            size_t shift = (size_t)dx;
+            memmove(row_ptr, row_ptr + shift, w - shift);
+            memset(row_ptr + (w - shift), 0, shift);
+        } else if (dx < 0 && -dx < w) {
+            size_t shift = (size_t)(-dx);
+            memmove(row_ptr + shift, row_ptr, w - shift);
+            memset(row_ptr, 0, shift);
         }
     }
 }
 
 // ==========================================
-// 3. MAP SERIALIZATION & PERSISTENCE
+// 3. MAP SERIALIZATION & CHECKSUM PERSISTENCE
 // ==========================================
+
+static uint32_t TessComputeChecksum(const uint8_t* data, size_t bytes) {
+    if (!data || bytes == 0) return 0;
+    uint32_t sum1 = 0xffff, sum2 = 0xffff;
+    while (bytes) {
+        size_t tlen = (bytes >= 360) ? 360 : bytes;
+        bytes -= tlen;
+        do {
+            sum1 += *data++;
+            sum2 += sum1;
+        } while (--tlen);
+        sum1 = (sum1 & 0xffff) + (sum1 >> 16);
+        sum2 = (sum2 & 0xffff) + (sum2 >> 16);
+    }
+    return ((sum2 & 0xffff) << 16) | (sum1 & 0xffff);
+}
 
 TESS_API int32_t tess_map_export_to_file(TesseractContext* ctx, const TessNode* root_node, const char* filepath) {
     if (!ctx || !root_node || !filepath) return -1;
@@ -107,34 +176,46 @@ TESS_API int32_t tess_map_export_to_file(TesseractContext* ctx, const TessNode* 
     if (!file) return -2;
 
     TessMapHeader header;
-    header.magic = 0x54455353;
-    header.version = 1;
+    memset(&header, 0, sizeof(TessMapHeader));
+
+    header.magic = TESS_MAGIC_HEADER;[span_4](start_span)[span_4](end_span)
+    header.version = TESS_CURRENT_VERSION;[span_5](start_span)[span_5](end_span)
     header.node_count = 0;
 
-    // Simple Breadth-First Serialization
-    const TessNode* queue[MAX_SERIALIZED_NODES];
+    typedef struct {
+        const TessNode* node;
+        uint32_t parent_id;
+    } QueueItem;
+
+    QueueItem queue[MAX_SERIALIZED_NODES];
     uint32_t q_head = 0, q_tail = 0;
 
-    queue[q_tail++] = root_node;
+    queue[q_tail++] = (QueueItem){root_node, 0xFFFFFFFF};
 
     while (q_head < q_tail && header.node_count < MAX_SERIALIZED_NODES) {
-        const TessNode* curr = queue[q_head++];
+        QueueItem item = queue[q_head++];
+        if (!item.node) continue;
 
-        TessSerializedNode* snode = &header.nodes[header.node_count++];
-        snode->node_id = curr->id;
-        snode->type = curr->type;
-        memcpy(snode->transform, curr->world_transform.m, sizeof(float) * 16);
+        uint32_t idx = header.node_count++;
+        header.nodes[idx].node_id = item.node->id;
+        header.nodes[idx].type = item.node->type;
+        header.nodes[idx].parent_id = item.parent_id;
+        memcpy(header.nodes[idx].transform, item.node->world_transform.m, sizeof(float) * 16);
 
-        for (uint32_t i = 0; i < curr->child_count; i++) {
-            if (q_tail < MAX_SERIALIZED_NODES) {
-                queue[q_tail++] = curr->children[i];
+        for (uint32_t i = 0; i < item.node->child_count; i++) {
+            if (q_tail < MAX_SERIALIZED_NODES && item.node->children[i]) {
+                queue[q_tail++] = (QueueItem){item.node->children[i], item.node->id};
             }
         }
     }
 
-    fwrite(&header, sizeof(TessMapHeader), 1, file);
+    size_t payload_size = header.node_count * sizeof(TessSerializedNode);
+    header.checksum = TessComputeChecksum((const uint8_t*)header.nodes, payload_size);
+
+    size_t written = fwrite(&header, sizeof(TessMapHeader), 1, file);
     fclose(file);
-    return 0;
+
+    return (written == 1) ? 0 : -3;
 }
 
 TESS_API int32_t tess_map_import_from_file(TesseractContext* ctx, const char* filepath) {
@@ -144,13 +225,27 @@ TESS_API int32_t tess_map_import_from_file(TesseractContext* ctx, const char* fi
     if (!file) return -2;
 
     TessMapHeader header;
+    memset(&header, 0, sizeof(TessMapHeader));
+
     size_t read_bytes = fread(&header, sizeof(TessMapHeader), 1, file);
     fclose(file);
 
-    if (read_bytes != 1 || header.magic != 0x54455353) {
+    if (read_bytes != 1 || header.magic != TESS_MAGIC_HEADER) {[span_6](start_span)[span_6](end_span)
         return -3; // Invalid Format
     }
 
-    // Nodes successfully reconstructed from header payload
+    if (header.version != TESS_CURRENT_VERSION) {[span_7](start_span)[span_7](end_span)
+        return -4; // Version Mismatch
+    }
+
+    if (header.node_count == 0 || header.node_count > MAX_SERIALIZED_NODES) {
+        return -5; // Corruption
+    }
+
+    size_t payload_size = header.node_count * sizeof(TessSerializedNode);
+    if (TessComputeChecksum((const uint8_t*)header.nodes, payload_size) != header.checksum) {
+        return -6; // Checksum Failure
+    }
+
     return (int32_t)header.node_count;
 }
