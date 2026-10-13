@@ -1,12 +1,14 @@
 // Filename: tesseract_npu_bypass.rs
-// Tesseract Direct-to-Silicon Spatial Hardware Engine (Production Hardened & Compile-Verified)
+// Universal Direct-to-Silicon Spatial Hardware Engine (Maximized Speed & Zero-Allocation Hot Loop)
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::ffi::c_void;
 
 #[repr(C, align(64))]
 pub struct HardwareDirectLidarStream {
-    pub raw_depth_points: [f32; 4096],
-    pub intensity_array: [u8; 4096],
+    pub raw_depth_points: *const f32,
+    pub intensity_array: *const u8,
+    pub point_capacity: u32,
     pub valid_point_count: u32,
     pub timestamp_ns: u64,
 }
@@ -21,11 +23,13 @@ pub struct SphericalHarmonicsLuminance {
 
 #[repr(C, align(16))]
 pub struct SiliconMeshlet {
-    pub vertices: [[f32; 3]; 64],
-    pub normals: [[f32; 3]; 64],
-    pub triangle_indices: [u8; 126],
-    pub vertex_count: u8,
-    pub index_count: u8,
+    pub vertices: *mut [f32; 3],
+    pub normals: *mut [f32; 3],
+    pub triangle_indices: *mut u8,
+    pub vertex_capacity: u16,
+    pub index_capacity: u16,
+    pub vertex_count: u16,
+    pub index_count: u16,
 }
 
 pub struct HardwareEngineCore {
@@ -34,7 +38,8 @@ pub struct HardwareEngineCore {
 }
 
 impl HardwareEngineCore {
-    pub fn new() -> Self {
+    #[inline(always)]
+    pub const fn new() -> Self {
         Self {
             is_dma_locked: AtomicBool::new(false),
             cached_lighting: SphericalHarmonicsLuminance {
@@ -54,11 +59,11 @@ impl HardwareEngineCore {
         height: usize,
     ) -> &SphericalHarmonicsLuminance {
         let pixel_count = match width.checked_mul(height) {
-            Some(count) => count,
-            None => return &self.cached_lighting,
+            Some(count) if count > 0 => count,
+            _ => return &self.cached_lighting,
         };
 
-        if pixel_count == 0 || camera_rgba_pixels.is_empty() {
+        if camera_rgba_pixels.is_empty() {
             return &self.cached_lighting;
         }
 
@@ -109,7 +114,6 @@ impl HardwareEngineCore {
         self.cached_lighting.bands_blue = [avg_b * c0, 0.0, avg_b * c1, 0.0, 0.0, 0.0, avg_b * c3 * 2.0, 0.0, avg_b * c4];
 
         let total_lum = (avg_r * 0.2126) + (avg_g * 0.7152) + (avg_b * 0.0722);
-
         let dir_x = (avg_r - total_lum).clamp(-1.0, 1.0);
         let dir_y = (avg_g - total_lum).clamp(-1.0, 1.0).max(0.1);
         let dir_z = (avg_b - total_lum).clamp(-1.0, 1.0);
@@ -130,10 +134,12 @@ impl HardwareEngineCore {
         &self.cached_lighting
     }
 
+    #[inline(always)]
     pub fn set_dma_lock(&self, locked: bool) {
         self.is_dma_locked.store(locked, Ordering::Release);
     }
 
+    #[inline(always)]
     pub fn check_dma_lock(&self) -> bool {
         self.is_dma_locked.load(Ordering::Acquire)
     }
@@ -151,44 +157,38 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
     let stream = &*lidar_stream;
     let mesh = &mut *out_meshlet;
 
-    let max_triangles_by_index_buffer = mesh.triangle_indices.len() / 3;
-    let max_vertices_by_indices = max_triangles_by_index_buffer.saturating_add(2);
+    if stream.raw_depth_points.is_null() || mesh.vertices.is_null() || mesh.normals.is_null() || mesh.triangle_indices.is_null() {
+        return false;
+    }
 
-    let max_safe_points_by_bounds = stream.raw_depth_points.len() / 3;
     let points_to_process = (stream.valid_point_count as usize)
-        .min(64)
-        .min(max_vertices_by_indices)
-        .min(max_safe_points_by_bounds);
+        .min(mesh.vertex_capacity as usize)
+        .min(stream.point_capacity as usize);
 
     if points_to_process < 3 {
         return false;
     }
 
+    let depth_slice = std::slice::from_raw_parts(stream.raw_depth_points, points_to_process * 3);
+    let vertex_slice = std::slice::from_raw_parts_mut(mesh.vertices, points_to_process);
+    let normal_slice = std::slice::from_raw_parts_mut(mesh.normals, points_to_process);
+
     for i in 0..points_to_process {
-        let base = match i.checked_mul(3) {
-            Some(b) => b,
-            None => return false,
-        };
-
-        if base + 2 >= stream.raw_depth_points.len() || i >= mesh.vertices.len() {
-            return false;
-        }
-
-        mesh.vertices[i] = [
-            stream.raw_depth_points[base],
-            stream.raw_depth_points[base + 1],
-            stream.raw_depth_points[base + 2],
+        let base = i * 3;
+        vertex_slice[i] = [
+            depth_slice[base],
+            depth_slice[base + 1],
+            depth_slice[base + 2],
         ];
     }
 
     for i in 0..points_to_process {
-        let current_idx = i;
         let next_idx = (i + 1) % points_to_process;
         let prev_idx = if i == 0 { points_to_process - 1 } else { i - 1 };
 
-        let v_curr = mesh.vertices[current_idx];
-        let v_next = mesh.vertices[next_idx];
-        let v_prev = mesh.vertices[prev_idx];
+        let v_curr = vertex_slice[i];
+        let v_next = vertex_slice[next_idx];
+        let v_prev = vertex_slice[prev_idx];
 
         let edge1 = [v_next[0] - v_curr[0], v_next[1] - v_curr[1], v_next[2] - v_curr[2]];
         let edge2 = [v_prev[0] - v_curr[0], v_prev[1] - v_curr[1], v_prev[2] - v_curr[2]];
@@ -198,39 +198,32 @@ pub unsafe extern "C" fn tesseract_direct_lidar_mesh(
         let nz = (edge1[0] * edge2[1]) - (edge1[1] * edge2[0]);
 
         let len_sq = (nx * nx) + (ny * ny) + (nz * nz);
-        if len_sq.is_finite() && len_sq > 1e-6 {
+        normal_slice[i] = if len_sq.is_finite() && len_sq > 1e-6 {
             let inv_len = 1.0 / len_sq.sqrt();
-            mesh.normals[i] = [nx * inv_len, ny * inv_len, nz * inv_len];
+            [nx * inv_len, ny * inv_len, nz * inv_len]
         } else {
-            mesh.normals[i] = [0.0, 1.0, 0.0]; 
-        }
+            [0.0, 1.0, 0.0]
+        };
     }
 
-    mesh.vertex_count = points_to_process as u8;
+    mesh.vertex_count = points_to_process as u16;
 
+    let index_slice = std::slice::from_raw_parts_mut(mesh.triangle_indices, mesh.index_capacity as usize);
     let mut tri_idx = 0;
     let max_triangles = points_to_process.saturating_sub(2);
-    
+
     for i in 1..=max_triangles {
-        if tri_idx + 2 >= mesh.triangle_indices.len() {
+        if tri_idx + 2 >= mesh.index_capacity as usize {
             break;
         }
-        mesh.triangle_indices[tri_idx] = 0;
-        mesh.triangle_indices[tri_idx + 1] = i as u8;
-        mesh.triangle_indices[tri_idx + 2] = (i + 1) as u8;
+        index_slice[tri_idx] = 0;
+        index_slice[tri_idx + 1] = i as u8;
+        index_slice[tri_idx + 2] = (i + 1) as u8;
         tri_idx += 3;
     }
 
-    mesh.index_count = tri_idx as u8;
+    mesh.index_count = tri_idx as u16;
     true
-}
-
-use std::ffi::c_void;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct TessMatrix4x4 {
-    pub m: [f32; 16],
 }
 
 extern "C" {
@@ -248,15 +241,16 @@ unsafe impl Send for TesseractEngine {}
 unsafe impl Sync for TesseractEngine {}
 
 impl TesseractEngine {
-    pub fn new() -> Result<Self, &'static str> {
+    pub fn new() -> Result<Self, i32> {
         let ctx = unsafe { tess_create() };
         if ctx.is_null() {
-            Err("Failed to initialize Tesseract bare-metal runtime context.")
+            Err(-2)
         } else {
             Ok(Self { ctx })
         }
     }
 
+    #[inline(always)]
     pub fn update(&mut self, delta_time: f32) -> Result<(), i32> {
         if self.ctx.is_null() { return Err(-2); }
         if !delta_time.is_finite() || delta_time <= 0.0 || delta_time > 1.0 { 
@@ -267,6 +261,7 @@ impl TesseractEngine {
         if status == 0 { Ok(()) } else { Err(status) }
     }
 
+    #[inline(always)]
     pub fn transform_vector(&self, in_vec: [f32; 3]) -> Result<[f32; 3], i32> {
         if self.ctx.is_null() { return Err(-2); }
         if !in_vec.iter().all(|v| v.is_finite()) {
