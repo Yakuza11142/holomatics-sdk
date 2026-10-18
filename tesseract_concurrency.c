@@ -14,7 +14,7 @@
 #include <stdalign.h>
 #endif
 
-// Safe conditional definitions to prevent any redefinition conflicts with tesseract_engine.h
+// Self-contained type definitions to guarantee zero missing-type errors under any build flags
 #ifndef TESS_MATRIX4X4_DEFINED
 #define TESS_MATRIX4X4_DEFINED
 typedef struct {
