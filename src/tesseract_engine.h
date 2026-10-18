@@ -11,10 +11,22 @@ extern "C" {
 // Opaque engine instance handle (prevents target memory corruption)
 typedef struct TesseractContext TesseractContext;
 
-// Matrix structure aligned for GPU vector math
+// Matrix structure aligned for GPU vector math with safety guard
+#ifndef TESS_MATRIX4X4_DEFINED
+#define TESS_MATRIX4X4_DEFINED
 typedef struct {
     float m[16];
 } TessMatrix4x4;
+#endif
+
+#ifndef TESS_RENDER_COMMAND_DEFINED
+#define TESS_RENDER_COMMAND_DEFINED
+typedef struct {
+    uint32_t command_id;
+    float delta_time;
+    TessMatrix4x4 payload_matrix;
+} TessRenderCommand;
+#endif
 
 // Engine Initialization & Lifecycle
 TesseractContext* tess_create(void);
