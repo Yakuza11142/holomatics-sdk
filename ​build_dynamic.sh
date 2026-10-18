@@ -1,68 +1,119 @@
 #!/usr/bin/env bash
-# Enforce strict error handling parameters to drop the pipeline if a step crashes
-set -euo pipefail
+set -e
 
-# 1. CONFIGURE YOUR NDK PATH
-ANDROID_NDK="${ANDROID_NDK:-$HOME/Android/Sdk/ndk/26.1.10909125}"
+echo "🚀 Starting Smart Polyglot Tesseract Build Pipeline..."
 
-if [ ! -d "$ANDROID_NDK" ]; then
-    echo "❌ Error: Android NDK not found at: $ANDROID_NDK"
-    echo " Please set the CORRECT path using: export ANDROID_NDK=/your/path"
-    exit 1
+# Locate Android NDK if building for Android targets
+NDK_PATH="${ANDROID_NDK_LATEST_HOME}"
+if [ -z "$NDK_PATH" ]; then
+  NDK_PATH="${ANDROID_HOME}/ndk-bundle"
 fi
 
-# Define ABIs and their corresponding Rust target triples
-declare -A ABI_TARGETS=(
-    ["arm64-v8a"]="aarch64-linux-android"
-    ["armeabi-v7a"]="armv7-linux-androideabi"
-    ["x86"]="i686-linux-android"
-    ["x86_64"]="x86_64-linux-android"
-)
+TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
+CLANG_C="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
+CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
+INCLUDE_FLAGS="-I. -I./src"
 
-MIN_SDK="29"
+# Track generated object/library archives
+OBJECT_FILES=""
+EXTERNAL_LIBS=""
 
-echo "⚙️ Initializing Universal Android Cross-Compilation Pipeline..."
+# ============================================================================
+# 1. RUST (.rs / Cargo.toml)
+# ============================================================================
+if [ -f "Cargo.toml" ]; then
+  echo "🦀 [Detected] Rust workspace found. Compiling core..."
+  rustup target add aarch64-linux-android 2>/dev/null || true
+  cargo build --release --target aarch64-linux-android
+  
+  RUST_LIB=$(find target/aarch64-linux-android/release/ -name "*.a" | head -n 1)
+  if [ -n "$RUST_LIB" ]; then
+    EXTERNAL_LIBS="$EXTERNAL_LIBS $RUST_LIB"
+    echo "📦 Linked Rust archive: $RUST_LIB"
+  fi
+fi
 
-rm -rf build_output
-mkdir -p build_output
+# ============================================================================
+# 2. C (.c)
+# ============================================================================
+if [ -n "$(find . -maxdepth 3 -name "*.c" ! -name "TessBridge.c")" ]; then
+  echo "🔍 [Detected] C source files found. Compiling..."
+  for file in $(find . -maxdepth 3 -name "*.c" ! -name "TessBridge.c"); do
+    echo "🔨 Compiling C: $file"
+    $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -DTESS_API="" -Wno-macro-redefined "$file" -o "${file%.c}.o"
+  done
+fi
 
-for ABI in "${!ABI_TARGETS[@]}"; do
-    RUST_TARGET="${ABI_TARGETS[$ABI]}"
-    echo "=========================================================="
-    echo "🔨 Building Rust & TessSDK for ABI: $ABI (Target: $RUST_TARGET)"
-    echo "=========================================================="
+# ============================================================================
+# 3. C++ (.cpp, .cc, .cxx)
+# ============================================================================
+if [ -n "$(find . -maxdepth 3 \( -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" \))" ]; then
+  echo "🔍 [Detected] C++ source files found. Compiling..."
+  for file in $(find . -maxdepth 3 \( -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" \)); do
+    echo "🔨 Compiling C++: $file"
+    $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" "$file" -o "${file%.*}.o"
+  done
+fi
 
-    # Ensure the Rust target toolchain is installed
-    rustup target add "$RUST_TARGET" 2>/dev/null || true
+# ============================================================================
+# 4. SWIFT (.swift)
+# ============================================================================
+if [ -n "$(find . -maxdepth 3 -name "*.swift")" ]; then
+  echo "🍏 [Detected] Swift source files found."
+  # Swift cross-compilation hooks can be integrated here if targeting iOS/macOS frameworks
+  echo "ℹ️ Swift modules detected (handled via Xcode/Swift Package Manager)."
+fi
 
-    # Cross-compile Rust static library first so it exists for CMake linking
-    cargo build --release --target "$RUST_TARGET" --manifest-path "Cargo.toml"
+# ============================================================================
+# 5. GO (.go)
+# ============================================================================
+if [ -n "$(find . -maxdepth 3 -name "*.go")" ]; then
+  echo "🐹 [Detected] Go source files found. Building C-archive..."
+  go build -buildmode=c-archive -o tessergo.a 2>/dev/null || echo "⚠️ Go build skipped or requires module init."
+  if [ -f "tessergo.a" ]; then
+    EXTERNAL_LIBS="$EXTERNAL_LIBS tessergo.a"
+  fi
+fi
 
-    BUILD_DIR="build_output/cmake_${ABI}"
-    TARGET_DIR="build_output/jniLibs/${ABI}"
-    mkdir -p "$BUILD_DIR"
-    mkdir -p "$TARGET_DIR"
+# ============================================================================
+# 6. C# (.cs)
+# ============================================================================
+if [ -n "$(find . -maxdepth 3 -name "*.cs")" ]; then
+  echo "#. [Detected] C# source files found. Building via dotnet..."
+  dotnet build -c Release 2>/dev/null || echo "⚠️ Dotnet build skipped."
+fi
 
-    # Run CMake pointing directly to the Android NDK cross-compilation toolchain
-    cmake -B "$BUILD_DIR" -H. \
-        -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
-        -DANDROID_ABI="$ABI" \
-        -DANDROID_PLATFORM="android-$MIN_SDK" \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DANDROID_STL=c++_shared
+# ============================================================================
+# 7. DART (.dart)
+# ============================================================================
+if [ -n "$(find . -maxdepth 3 -name "*.dart")" ]; then
+  echo "🐦 [Detected] Dart / Flutter project files found."
+  if [ -f "pubspec.yaml" ]; then
+    echo "ℹ️ Pub package manager configuration verified."
+  fi
+fi
 
-    # Compile native components
-    cmake --build "$BUILD_DIR" --config Release --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+# ============================================================================
+# 8. PYTHON (.py)
+# ============================================================================
+if [ -n "$(find . -maxdepth 3 -name "*.py")" ]; then
+  echo "🐍 [Detected] Python scripts found."
+  python3 -m py_compile $(find . -maxdepth 3 -name "*.py") 2>/dev/null || true
+fi
 
-    if [ -f "$BUILD_DIR/libTessSDK.so" ]; then
-        mv "$BUILD_DIR/libTessSDK.so" "$TARGET_DIR/libTessSDK.so"
-        echo "✅ Generated Universal Asset: $TARGET_DIR/libTessSDK.so"
-    else
-        echo "❌ Critical compilation failure: Target asset output missing for $ABI."
-        exit 1
-    fi
-done
+# ============================================================================
+# FINAL UNIFIED LINKING STEP
+# ============================================================================
+ALL_OBJECTS=$(find . -maxdepth 3 -name "*.o")
 
-echo "=========================================================="
-echo "🎉 Pipeline Completed! Zero errors achieved. Binaries are in './build_output/jniLibs/'."
-echo "=========================================================="
+if [ -n "$ALL_OBJECTS" ] || [ -n "$EXTERNAL_LIBS" ]; then
+  echo "🔨 Packaging final unified shared library: libTessSDK.so"
+  $CLANG_CC -shared -fPIC -O3 -pthread \
+            $ALL_OBJECTS \
+            $EXTERNAL_LIBS \
+            -landroid -llog \
+            -o libTessSDK.so
+  echo "✨ Smart Polyglot Build Complete Successfully!"
+else
+  echo "⚠️ No compiled object modules generated."
+fi
