@@ -1,6 +1,3 @@
-// Filename: tesseract_core.rs
-// Universal High-Performance Spatial Matrix & Vector Engine
-
 use std::ops::Mul;
 
 #[cfg(target_arch = "x86_64")]
@@ -12,7 +9,7 @@ pub struct Vec4 { pub x: f32, pub y: f32, pub z: f32, pub w: f32 }
 
 impl Vec4 {
     #[inline(always)]
-    pub fn new(x: f32, y: f32, z: f32, w: f32) -> Self { Self { x, y, z, w } }
+    pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self { Self { x, y, z, w } }
 }
 
 #[repr(C, align(16))]
@@ -21,7 +18,7 @@ pub struct Mat4 { pub cols: [Vec4; 4] }
 
 impl Mat4 {
     #[inline(always)]
-    pub fn identity() -> Self {
+    pub const fn identity() -> Self {
         Self {
             cols: [
                 Vec4::new(1.0, 0.0, 0.0, 0.0),
@@ -36,7 +33,7 @@ impl Mat4 {
     pub fn multiply(&self, rhs: &Mat4) -> Mat4 {
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            let mut result = std::mem::maybe_uninit::<Mat4>::uninit();
+            let mut result = std::mem::MaybeUninit::<Mat4>::uninit();
             let res_ptr = result.as_mut_ptr() as *mut __m128;
             let lhs0 = _mm_load_ps(&self.cols[0] as *const Vec4 as *const f32);
             let lhs1 = _mm_load_ps(&self.cols[1] as *const Vec4 as *const f32);
@@ -56,8 +53,9 @@ impl Mat4 {
                 out_col = _mm_add_ps(out_col, _mm_mul_ps(lhs3, wwww));
                 _mm_store_ps(res_ptr.add(i) as *mut f32, out_col);
             }
-            result.assume_init()
+            return result.assume_init();
         }
+
         #[cfg(not(target_arch = "x86_64"))]
         {
             let mut res = Mat4::identity();
