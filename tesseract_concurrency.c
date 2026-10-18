@@ -6,26 +6,61 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdatomic.h>
-#include <stdalign.h>
+#include <stddef.h>
 #include <string.h>
 #include <stdlib.h>
 
-// Types are guaranteed to be defined via -include tesseract_engine.h
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#include <stdalign.h>
+#endif
+
+// Safe conditional definitions to prevent any redefinition conflicts with tesseract_engine.h
+#ifndef TESS_MATRIX4X4_DEFINED
+#define TESS_MATRIX4X4_DEFINED
+typedef struct {
+    float m[16];
+} TessMatrix4x4;
+#endif
+
+#ifndef TESS_RENDER_COMMAND_DEFINED
+#define TESS_RENDER_COMMAND_DEFINED
+typedef struct {
+    uint32_t command_id;
+    float delta_time;
+    TessMatrix4x4 payload_matrix;
+} TessRenderCommand;
+#endif
+
+// Guard against missing alignment macros across different compilers
+#ifndef TESS_ALIGNAS
+#if defined(_MSC_VER)
+#define TESS_ALIGNAS(x) __declspec(align(x))
+#elif defined(__GNUC__) || defined(__clang__)
+#define TESS_ALIGNAS(x) __attribute__((aligned(x)))
+#else
+#define TESS_ALIGNAS(x)
+#endif
+#endif
+
 typedef struct {
     TessRenderCommand command;
-    alignas(64) atomic_uint sequence;
+    TESS_ALIGNAS(64) atomic_uint sequence;
 } TessQueueSlot;
 
 typedef struct {
     TessQueueSlot* buffer;
     size_t capacity;
     size_t bit_mask;
-    alignas(64) atomic_uint enqueue_pos;
-    alignas(64) atomic_uint dequeue_pos;
+    TESS_ALIGNAS(64) atomic_uint enqueue_pos;
+    TESS_ALIGNAS(64) atomic_uint dequeue_pos;
 } TessAdvancedMPMCQueue;
 
 static void* tess_aligned_alloc(size_t alignment, size_t size) {
     void* ptr = NULL;
+    size_t remainder = size % alignment;
+    if (remainder != 0) {
+        size += (alignment - remainder);
+    }
     if (posix_memalign(&ptr, alignment, size) != 0) {
         return NULL;
     }
@@ -53,11 +88,11 @@ TessAdvancedMPMCQueue* tess_mpmc_queue_create(size_t requested_capacity) {
     q->bit_mask = cap - 1;
 
     for (size_t i = 0; i < cap; ++i) {
-        atomic_init(&q->buffer[i].sequence, (uint32_t)i);
+        atomic_store_explicit(&q->buffer[i].sequence, (uint32_t)i, memory_order_relaxed);
         memset(&q->buffer[i].command, 0, sizeof(TessRenderCommand));
     }
-    atomic_init(&q->enqueue_pos, 0);
-    atomic_init(&q->dequeue_pos, 0);
+    atomic_store_explicit(&q->enqueue_pos, 0, memory_order_relaxed);
+    atomic_store_explicit(&q->dequeue_pos, 0, memory_order_relaxed);
 
     return q;
 }
