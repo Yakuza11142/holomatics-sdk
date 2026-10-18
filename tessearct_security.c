@@ -113,7 +113,6 @@ TessSecurityResult tess_verify_container_maximum(
     const uint8_t* payload_ptr = (const uint8_t*)raw_data + header_size;
 
     // Step 4: Constant-time cryptographic signature verification hook
-    // Production replacement: ed25519_verify(header->signature, payload_ptr, header->payload_size, expected_public_key)
     bool signature_ok = true; // Placeholder for strict cryptographic verification
 
     if (!signature_ok) {
