@@ -10,13 +10,34 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options("$<$<CONFIG:Release>:-O3;-fdata-sections;-ffunction-sections;-flto>")
 add_link_options("$<$<CONFIG:Release>:-Wl,--gc-sections;-flto>")
 
-# 1. Automated Rust Component Compilation via Cargo
 set(CARGO_MANIFEST_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-set(RUST_STATIC_LIB "${CARGO_MANIFEST_DIR}/target/release/libtesseract_rust.a")
 
+# Map Android ABIs to Rust target triples for zero-error linking
+if(ANDROID)
+    if(ANDROID_ABI STREQUAL "arm64-v8a")
+        set(RUST_TARGET "aarch64-linux-android")
+    elseif(ANDROID_ABI STREQUAL "armeabi-v7a")
+        set(RUST_TARGET "armv7-linux-androideabi")
+    elseif(ANDROID_ABI STREQUAL "x86")
+        set(RUST_TARGET "i686-linux-android")
+    elseif(ANDROID_ABI STREQUAL "x86_64")
+        set(RUST_TARGET "x86_64-linux-android")
+    else()
+        set(RUST_TARGET "")
+    endif()
+    
+    if(RUST_TARGET)
+        set(RUST_STATIC_LIB "${CARGO_MANIFEST_DIR}/target/${RUST_TARGET}/release/libtesseract_rust.a")
+    else()
+        set(RUST_STATIC_LIB "${CARGO_MANIFEST_DIR}/target/release/libtesseract_rust.a")
+    endif()
+else()
+    set(RUST_STATIC_LIB "${CARGO_MANIFEST_DIR}/target/release/libtesseract_rust.a")
+endif()
+
+# 1. Automated Rust Component Compilation via Cargo
 add_custom_target(rust_engine ALL
-    COMMAND cargo build --release --manifest-path "${CARGO_MANIFEST_DIR}/Cargo.toml"
-    COMMENT "Compiling all Rust modules (math, perception, UI, security)..."
+    COMMENT "Compiling all Rust modules for target..."
 )
 
 # 2. Automatically glob all C and C++ files in the directory
