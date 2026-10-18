@@ -1,4 +1,3 @@
-// Filename: tesseract_hardware_adaptive.rs
 pub mod tesseract_hardware_adaptive {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub struct Vector2 { pub x: f32, pub y: f32 }
@@ -39,25 +38,36 @@ pub mod tesseract_hardware_adaptive {
         if count < 3 || iter <= 0 { return best; }
 
         let mut max_inliers = 0;
-        let dyn_thresh = base_thresh * (1.0 + (imu_jitter * 2.5).clamp(0.0, 5.0));
+        let dyn_thresh = (base_thresh * (1.0 + (imu_jitter * 2.5).abs())).clamp(0.001, 100.0);
         let mut seed: usize = 0x5EE4;
 
         for _ in 0..iter {
-            seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+            seed = seed.wrapping_mul(48271).wrapping_add(1) % 0x7fffffff;
             let i1 = seed % count;
             let i2 = (seed >> 3) % count;
             let i3 = (seed >> 7) % count;
             if i1 == i2 || i2 == i3 || i1 == i3 { continue; }
 
-            let v1 = points[i2].sub(points[i1]);
-            let v2 = points[i3].sub(points[i1]);
+            let p1 = points[i1];
+            let p2 = points[i2];
+            let p3 = points[i3];
+
+            let v1 = p2.sub(p1);
+            let v2 = p3.sub(p1);
             let norm = v1.cross(v2);
             let len_sq = norm.dot(norm);
 
-            if len_sq > 0.0001 {
-                let norm = norm.scale(1.0 / len_sq.sqrt());
-                let d = -norm.dot(points[i1]);
-                let inliers = points.iter().filter(|pt| (norm.dot(**pt) + d).abs() < dyn_thresh).count();
+            if len_sq > 1e-6 && len_sq.is_finite() {
+                let inv_len = 1.0 / len_sq.sqrt();
+                let norm = norm.scale(inv_len);
+                let d = -norm.dot(p1);
+                
+                if !d.is_finite() { continue; }
+
+                let inliers = points.iter().filter(|pt| {
+                    let val = norm.dot(**pt) + d;
+                    val.is_finite() && val.abs() < dyn_thresh
+                }).count();
 
                 if inliers > max_inliers {
                     max_inliers = inliers;
@@ -73,15 +83,15 @@ pub mod tesseract_hardware_adaptive {
         let stride = match thermal_lvl { 1 => 32, lvl if lvl >= 2 => 64, _ => 16 };
         if pixels.is_empty() || w <= stride || h <= stride { return sh; }
 
-        let (wf, hf, mut samples) = (w as f32, h as f32, 0);
+        let (wf, hf, mut samples) = (w as f32, h as f32, 0_u32);
         let mut y = 0;
         while y < h {
             let mut x = 0;
             while x < w {
-                let idx = y * w + x;
+                let idx = y.saturating_mul(w).saturating_add(x);
                 if idx >= pixels.len() { break; }
                 let p = pixels[idx];
-                let (r, g, b) = (p.r as f32 * 0.00392, p.g as f32 * 0.00392, p.b as f32 * 0.00392);
+                let (r, g, b) = (p.r as f32 * 0.003921569, p.g as f32 * 0.003921569, p.b as f32 * 0.003921569);
                 let (nx, ny) = ((x as f32 / wf) * 2.0 - 1.0, (y as f32 / hf) * 2.0 - 1.0);
                 let nz = { let ds = nx*nx + ny*ny; if ds < 1.0 { (1.0 - ds).sqrt() } else { 0.0 } };
 
@@ -89,15 +99,19 @@ pub mod tesseract_hardware_adaptive {
                 sh.g[0] += g * 0.282; sh.g[1] += g * 0.488 * nx; sh.g[2] += g * 0.488 * nz;
                 sh.b[0] += b * 0.282; sh.b[1] += b * 0.488 * nx; sh.b[2] += b * 0.488 * nz;
 
-                samples += 1;
-                x += stride;
+                samples = samples.saturating_add(1);
+                x = x.saturating_add(stride);
             }
-            y += stride;
+            y = y.saturating_add(stride);
         }
 
         if samples > 0 {
             let sc = 12.56637 / samples as f32;
-            for i in 0..3 { sh.r[i] *= sc; sh.g[i] *= sc; sh.b[i] *= sc; }
+            for i in 0..3 { 
+                sh.r[i] = (sh.r[i] * sc).clamp(-1e5, 1e5); 
+                sh.g[i] = (sh.g[i] * sc).clamp(-1e5, 1e5); 
+                sh.b[i] = (sh.b[i] * sc).clamp(-1e5, 1e5); 
+            }
         }
         sh
     }
