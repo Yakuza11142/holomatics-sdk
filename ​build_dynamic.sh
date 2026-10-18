@@ -26,13 +26,13 @@ for ABI in "${ARCHS[@]}"; do
     echo "=========================================================="
     echo "🔨 Compiling TessSDK for target platform: $ABI"
     echo "=========================================================="
-    
+
     # Create isolated output directory structures
     BUILD_DIR="build_output/cmake_${ABI}"
     TARGET_DIR="build_output/jniLibs/${ABI}"
     mkdir -p "$BUILD_DIR"
     mkdir -p "$TARGET_DIR"
-    
+
     # Run CMake pointing directly to the Android NDK cross-compilation toolchain
     cmake -B "$BUILD_DIR" -H. \
         -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
@@ -43,7 +43,7 @@ for ABI in "${ARCHS[@]}"; do
 
     # Compile the files
     cmake --build "$BUILD_DIR" --config Release --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
-    
+
     # Copy the finished library out to the deployment directory
     if [ -f "$BUILD_DIR/libTessSDK.so" ]; then
         mv "$BUILD_DIR/libTessSDK.so" "$TARGET_DIR/libTessSDK.so"
