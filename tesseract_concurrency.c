@@ -1,9 +1,3 @@
-/*
- * File: tesseract_concurrency.c
- * Target: Universal Dynamic Lock-Free Multithreading Engine
- * Constraints: Zero hardcoded strings, zero static buffer limits, dynamic runtime sizing.
- */
-
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdatomic.h>
@@ -11,17 +5,9 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Include engine header for TessMatrix4x4 and core types
-#if __has_include("tesseract_engine.h")
-#include "tesseract_engine.h"
-#elif __has_include("src/tesseract_engine.h")
-#include "src/tesseract_engine.h"
-#else
-// Guard against duplicate definition if header isn't available
 #ifndef TESS_MATRIX4X4_DEFINED
 #define TESS_MATRIX4X4_DEFINED
 typedef struct { float m[16]; } TessMatrix4x4;
-#endif
 #endif
 
 #ifndef TESS_RENDER_COMMAND_DEFINED
@@ -35,20 +21,17 @@ typedef struct {
 
 typedef struct {
     TessRenderCommand command;
-    _Alignas(64) _Atomic uint32_t sequence;
+    alignas(64) atomic_uint sequence;
 } TessQueueSlot;
 
 typedef struct {
     TessQueueSlot* buffer;
     size_t capacity;
     size_t bit_mask;
-    _Alignas(64) _Atomic uint32_t enqueue_pos;
-    _Alignas(64) _Atomic uint32_t dequeue_pos;
+    alignas(64) atomic_uint enqueue_pos;
+    alignas(64) atomic_uint dequeue_pos;
 } TessAdvancedMPMCQueue;
 
-/**
- * Universal aligned memory allocation helper for NDK & POSIX portability.
- */
 static void* tess_aligned_alloc(size_t alignment, size_t size) {
     void* ptr = NULL;
     if (posix_memalign(&ptr, alignment, size) != 0) {
@@ -57,14 +40,9 @@ static void* tess_aligned_alloc(size_t alignment, size_t size) {
     return ptr;
 }
 
-/**
- * Dynamically instantiates and initializes the MPMC queue with runtime-configured capacity.
- * The capacity is automatically rounded up to the nearest power of two for lightning-fast bitwise masking.
- */
 TessAdvancedMPMCQueue* tess_mpmc_queue_create(size_t requested_capacity) {
-    if (requested_capacity == 0) return NULL;
+    if (requested_capacity == 0 || requested_capacity > (1 << 30)) return NULL;
 
-    // Find next power of two for universal bitwise masking
     size_t cap = 1;
     while (cap < requested_capacity) {
         cap <<= 1;
@@ -92,9 +70,6 @@ TessAdvancedMPMCQueue* tess_mpmc_queue_create(size_t requested_capacity) {
     return q;
 }
 
-/**
- * Universal Thread-Safe Lock-Free Enqueue operation using dynamic bit masking.
- */
 bool tess_mpmc_queue_push(TessAdvancedMPMCQueue* q, const TessRenderCommand* cmd) {
     if (!q || !cmd || !q->buffer) return false;
 
@@ -113,16 +88,13 @@ bool tess_mpmc_queue_push(TessAdvancedMPMCQueue* q, const TessRenderCommand* cmd
                 return true;
             }
         } else if (diff < 0) {
-            return false; // Queue is fully saturated
+            return false;
         } else {
             pos = atomic_load_explicit(&q->enqueue_pos, memory_order_relaxed);
         }
     }
 }
 
-/**
- * Universal Thread-Safe Lock-Free Dequeue operation.
- */
 bool tess_mpmc_queue_pop(TessAdvancedMPMCQueue* q, TessRenderCommand* out_cmd) {
     if (!q || !out_cmd || !q->buffer) return false;
 
@@ -141,16 +113,13 @@ bool tess_mpmc_queue_pop(TessAdvancedMPMCQueue* q, TessRenderCommand* out_cmd) {
                 return true;
             }
         } else if (diff < 0) {
-            return false; // Queue is empty
+            return false;
         } else {
             pos = atomic_load_explicit(&q->dequeue_pos, memory_order_relaxed);
         }
     }
 }
 
-/**
- * Cleanly frees all dynamically allocated memory blocks.
- */
 void tess_mpmc_queue_destroy(TessAdvancedMPMCQueue* q) {
     if (q) {
         if (q->buffer) {
