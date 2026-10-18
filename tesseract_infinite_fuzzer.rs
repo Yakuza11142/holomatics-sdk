@@ -1,28 +1,16 @@
-// Filename: tesseract_infinite_fuzzer.rs
-// Universal Coverage-Guided Infinite Fuzzer (Maximized Speed & Zero-Allocation Hot Loop)
-
 pub mod tesseract_infinite_fuzzer {
 
     #[derive(Debug, Clone, Copy, PartialEq)]
-    pub struct Vector3 {
-        pub x: f32,
-        pub y: f32,
-        pub z: f32,
-    }
+    pub struct Vector3 { pub x: f32, pub y: f32, pub z: f32 }
 
     impl Vector3 {
         pub const ZERO: Self = Self { x: 0.0, y: 0.0, z: 0.0 };
-
         #[inline(always)]
-        pub const fn new(x: f32, y: f32, z: f32) -> Self {
-            Self { x, y, z }
-        }
+        pub const fn new(x: f32, y: f32, z: f32) -> Self { Self { x, y, z } }
     }
 
     #[derive(Debug, Clone, Copy, PartialEq)]
-    pub struct Matrix4 {
-        pub m: [[f32; 4]; 4],
-    }
+    pub struct Matrix4 { pub m: [[f32; 4]; 4] }
 
     impl Matrix4 {
         #[inline(always)]
@@ -57,10 +45,7 @@ pub mod tesseract_infinite_fuzzer {
     }
 
     #[derive(Debug, Clone, Copy, Default)]
-    pub struct SavedSeed {
-        pub seed_val: u32,
-        pub hits: u32,
-    }
+    pub struct SavedSeed { pub seed_val: u32, pub hits: u32 }
 
     pub const MAX_QUEUE_SIZE: usize = 128;
     pub const BITMAP_SIZE: usize = 65536;
@@ -99,45 +84,6 @@ pub mod tesseract_infinite_fuzzer {
     }
 
     #[inline(always)]
-    pub fn tess_get_dictionary_token(state: &mut FuzzerState) -> u32 {
-        match tess_next_random(state) & 7 {
-            0 => 0x7F80_0000, // +Inf
-            1 => 0xFF80_0000, // -Inf
-            2 => 0x7FC0_0000, // NaN
-            3 => 0x0000_0000, // 0.0
-            4 => 0x8000_0000, // -0.0
-            5 => 0x3F80_0000, // 1.0
-            6 => 0xBF80_0000, // -1.0
-            _ => 0x0000_0001, // Denormal Min
-        }
-    }
-
-    #[inline(always)]
-    pub fn tess_mutate_bitwise(state: &mut FuzzerState, input_bits: u32) -> f32 {
-        let selector = tess_next_random(state) & 3;
-        let output_bits = match selector {
-            0 => {
-                let bit_pos = tess_next_random(state) & 31;
-                input_bits ^ (1u32 << bit_pos)
-            }
-            1 => tess_get_dictionary_token(state),
-            2 => {
-                match tess_next_random(state) % 3 {
-                    0 => input_bits | 0xFF00_0000,
-                    1 => input_bits & 0x00FF_FFFF,
-                    _ => input_bits ^ 0x5555_5555,
-                }
-            }
-            _ => {
-                let noise = tess_next_random(state) & 0x00FF_FFFF;
-                (input_bits & 0xFF00_0000) | noise
-            }
-        };
-
-        f32::from_bits(output_bits)
-    }
-
-    #[inline(always)]
     pub fn tess_evaluate_coverage(state: &mut FuzzerState, executed_path_id: u16, working_seed: u32) {
         let map_idx = (executed_path_id as usize) & (BITMAP_SIZE - 1);
 
@@ -146,38 +92,32 @@ pub mod tesseract_infinite_fuzzer {
             state.unique_features_found = state.unique_features_found.saturating_add(1);
 
             if state.queue_count < MAX_QUEUE_SIZE {
-                state.queue[state.queue_count] = SavedSeed {
-                    seed_val: working_seed,
-                    hits: 0,
-                );
+                state.queue[state.queue_count] = SavedSeed { seed_val: working_seed, hits: 0 };
                 state.queue_count += 1;
             }
-        } else if state.coverage_bitmap[map_idx] < 255 {
-            state.coverage_bitmap[map_idx] += 1;
+        } else {
+            state.coverage_bitmap[map_idx] = state.coverage_bitmap[map_idx].saturating_add(1);
         }
     }
 
     #[inline(always)]
     pub fn tess_fuzz_engine_with_feedback(state: &mut FuzzerState, max_iterations: i32) {
-        if max_iterations <= 0 {
-            return;
-        }
+        if max_iterations <= 0 { return; }
 
         for _ in 0..max_iterations {
             let mut working_seed = state.seed;
 
             if state.queue_count > 0 && (tess_next_random(state) % 10) < 4 {
                 let q_idx = (tess_next_random(state) as usize) % state.queue_count;
-                working_seed = state.queue[q_idx].seed_val;
-                state.queue[q_idx].hits = state.queue[q_idx].hits.saturating_add(1);
+                if q_idx < state.queue_count {
+                    working_seed = state.queue[q_idx].seed_val;
+                    state.queue[q_idx].hits = state.queue[q_idx].hits.saturating_add(1);
+                }
             }
 
-            let base_raw = tess_next_random(state);
-            let m0 = tess_mutate_bitwise(state, base_raw);
-            let next_rand1 = tess_next_random(state);
-            let m1 = tess_mutate_bitwise(state, next_rand1);
-            let next_rand2 = tess_next_random(state);
-            let m2 = tess_mutate_bitwise(state, next_rand2);
+            let m0 = f32::from_bits(tess_next_random(state));
+            let m1 = f32::from_bits(tess_next_random(state));
+            let m2 = f32::from_bits(tess_next_random(state));
 
             let mat = Matrix4::new(
                 m0, m1, m2, 0.0,
@@ -187,14 +127,9 @@ pub mod tesseract_infinite_fuzzer {
             );
 
             let pt = Vector3::new(m0, m1, m2);
-            let fallback = Vector3::ZERO;
+            let res = tess_transform_point_safe(pt, mat, Vector3::ZERO);
 
-            let res = tess_transform_point_safe(pt, mat, fallback);
-
-            let res_x_bits = res.x.to_bits();
-            let res_y_bits = res.y.to_bits();
-            let pseudo_path_hash = ((res_x_bits ^ res_y_bits) & 0xFFFF) as u16;
-
+            let pseudo_path_hash = ((res.x.to_bits() ^ res.y.to_bits()) & 0xFFFF) as u16;
             tess_evaluate_coverage(state, pseudo_path_hash, working_seed);
 
             if !res.x.is_finite() || !res.y.is_finite() || !res.z.is_finite() {
