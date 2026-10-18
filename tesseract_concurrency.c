@@ -1,3 +1,8 @@
+/*
+ * File: tesseract_concurrency.c
+ * Target: Universal Dynamic Lock-Free Multithreading Engine (Max Security & 0 Errors)
+ */
+
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdatomic.h>
@@ -5,20 +10,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#ifndef TESS_MATRIX4X4_DEFINED
-#define TESS_MATRIX4X4_DEFINED
-typedef struct { float m[16]; } TessMatrix4x4;
-#endif
-
-#ifndef TESS_RENDER_COMMAND_DEFINED
-#define TESS_RENDER_COMMAND_DEFINED
-typedef struct {
-    uint32_t command_id;
-    float delta_time;
-    TessMatrix4x4 payload_matrix;
-} TessRenderCommand;
-#endif
-
+// Types are guaranteed to be defined via -include tesseract_engine.h
 typedef struct {
     TessRenderCommand command;
     alignas(64) atomic_uint sequence;
