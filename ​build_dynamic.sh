@@ -2,7 +2,7 @@
 # Enforce strict error handling parameters to drop the pipeline if a step crashes
 set -euo pipefail
 
-# 1. CONFIGURE YOUR NDK PATH (Update this path to match your machine's setup)
+# 1. CONFIGURE YOUR NDK PATH
 ANDROID_NDK="${ANDROID_NDK:-$HOME/Android/Sdk/ndk/26.1.10909125}"
 
 if [ ! -d "$ANDROID_NDK" ]; then
@@ -11,23 +11,33 @@ if [ ! -d "$ANDROID_NDK" ]; then
     exit 1
 fi
 
-# Define the 4 standard Android Target Architectures
-ARCHS=("arm64-v8a" "armeabi-v7a" "x86" "x86_64")
-MIN_SDK="29" # Hardcoded to 29 due to 'memfd_create' requirements
+# Define ABIs and their corresponding Rust target triples
+declare -A ABI_TARGETS=(
+    ["arm64-v8a"]="aarch64-linux-android"
+    ["armeabi-v7a"]="armv7-linux-androideabi"
+    ["x86"]="i686-linux-android"
+    ["x86_64"]="x86_64-linux-android"
+)
+
+MIN_SDK="29"
 
 echo "⚙️ Initializing Universal Android Cross-Compilation Pipeline..."
 
-# Clean out any old build folders
 rm -rf build_output
 mkdir -p build_output
 
-# Loop and compile for every platform dynamically
-for ABI in "${ARCHS[@]}"; do
+for ABI in "${!ABI_TARGETS[@]}"; do
+    RUST_TARGET="${ABI_TARGETS[$ABI]}"
     echo "=========================================================="
-    echo "🔨 Compiling TessSDK for target platform: $ABI"
+    echo "🔨 Building Rust & TessSDK for ABI: $ABI (Target: $RUST_TARGET)"
     echo "=========================================================="
 
-    # Create isolated output directory structures
+    # Ensure the Rust target toolchain is installed
+    rustup target add "$RUST_TARGET" 2>/dev/null || true
+
+    # Cross-compile Rust static library first so it exists for CMake linking
+    cargo build --release --target "$RUST_TARGET" --manifest-path "Cargo.toml"
+
     BUILD_DIR="build_output/cmake_${ABI}"
     TARGET_DIR="build_output/jniLibs/${ABI}"
     mkdir -p "$BUILD_DIR"
@@ -41,10 +51,9 @@ for ABI in "${ARCHS[@]}"; do
         -DCMAKE_BUILD_TYPE=Release \
         -DANDROID_STL=c++_shared
 
-    # Compile the files
+    # Compile native components
     cmake --build "$BUILD_DIR" --config Release --parallel $(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
 
-    # Copy the finished library out to the deployment directory
     if [ -f "$BUILD_DIR/libTessSDK.so" ]; then
         mv "$BUILD_DIR/libTessSDK.so" "$TARGET_DIR/libTessSDK.so"
         echo "✅ Generated Universal Asset: $TARGET_DIR/libTessSDK.so"
@@ -55,6 +64,5 @@ for ABI in "${ARCHS[@]}"; do
 done
 
 echo "=========================================================="
-echo "🎉 Pipeline Completed! Universal binaries are inside the './build_output/jniLibs/' directory."
-echo "   Copy the 'jniLibs' folder directly into your Android Studio app project directory."
+echo "🎉 Pipeline Completed! Zero errors achieved. Binaries are in './build_output/jniLibs/'."
 echo "=========================================================="
