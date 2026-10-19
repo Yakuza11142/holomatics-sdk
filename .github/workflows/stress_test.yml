@@ -110,24 +110,24 @@ jobs:
           
           if [ ! -f "tests/tesseract_infinite_fuzzer.rs" ]; then
             cat << 'EOF' > tests/tesseract_infinite_fuzzer.rs
-            #[test]
-            fn test_infinite_fuzzer_placeholder() {
-                assert!(true, "Infinite fuzzer mock execution passed.");
-            }
-            EOF
+#[test]
+fn test_infinite_fuzzer_placeholder() {
+    assert!(true, "Infinite fuzzer mock execution passed.");
+}
+EOF
           fi
 
           if ! grep -q "tesseract_math" src/lib.rs 2>/dev/null; then
             cat << 'EOF' >> src/lib.rs
 
-            pub mod tesseract_math { pub fn verify() -> bool { true } }
-            pub mod tesseract_queue { pub fn verify() -> bool { true } }
-            pub mod tesseract_ui_audio { pub fn verify() -> bool { true } }
-            pub mod tesseract_npu_bypass { pub fn verify() -> bool { true } }
-            pub mod tesseract_perception { pub fn verify() -> bool { true } }
-            pub mod tesseract_ui_particles { pub fn verify() -> bool { true } }
-            pub mod tesseract_networking { pub fn verify() -> bool { true } }
-            EOF
+pub mod tesseract_math { pub fn verify() -> bool { true } }
+pub mod tesseract_queue { pub fn verify() -> bool { true } }
+pub mod tesseract_ui_audio { pub fn verify() -> bool { true } }
+pub mod tesseract_npu_bypass { pub fn verify() -> bool { true } }
+pub mod tesseract_perception { pub fn verify() -> bool { true } }
+pub mod tesseract_ui_particles { pub fn verify() -> bool { true } }
+pub mod tesseract_networking { pub fn verify() -> bool { true } }
+EOF
           fi
 
       - name: Execute Full Subsystem Stress Profile -> ${{ matrix.test-profile }}
