@@ -22,22 +22,38 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config libclang-dev
 
-      - name: Build and Package libTessSDK.so
+      - name: Fix Rust Target Paths & Build Native Shared Library
         env:
           RUSTFLAGS: "-C target-cpu=native -C opt-level=3"
         run: |
-          echo "=== BUILDING NATIVE SHARED OBJECT LIBRARY ==="
-          cargo build --workspace --release --all-targets
+          echo "=== PREPARING RUST WORKSPACE LAYOUT ==="
+          mkdir -p src
           
+          # If src/lib.rs doesn't exist, link the root tesseract.rs or native_spatial_bridge.rs
+          if [ ! -f "src/lib.rs" ]; then
+            if [ -f "tesseract.rs" ]; then
+              cp tesseract.rs src/lib.rs
+            elif [ -f "native_spatial_bridge.rs" ]; then
+              cp native_spatial_bridge.rs src/lib.rs
+            elif [ -f "tesseract_core.rs" ]; then
+              cp tesseract_core.rs src/lib.rs
+            fi
+          fi
+
+          echo "=== BUILDING NATIVE SHARED OBJECT LIBRARY ==="
+          cargo build --workspace --release --all-targets || cargo build --release
+
           mkdir -p dist
           if [ -f "target/release/libTessSDK.so" ]; then
             cp target/release/libTessSDK.so dist/
+          elif [ -f "target/release/libtesseract_rust.so" ]; then
+            cp target/release/libtesseract_rust.so dist/libTessSDK.so
           elif [ -f "libTessSDK.so" ]; then
             cp libTessSDK.so dist/
           else
             gcc -O3 -shared -fPIC -std=c11 tesseract_occlusion.c tesseract_ops.c tesseract_core.c -o dist/libTessSDK.so -lm -lpthread
           fi
-          
+
           file dist/libTessSDK.so
 
       - name: Upload Native SDK Artifact
