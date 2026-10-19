@@ -1,7 +1,7 @@
 name: Holomatics Engine Max Stress Test
 
 on:
-  workflow_dispatch: # Allows manual triggering from the GitHub Mobile app
+  workflow_dispatch:
   push:
     branches: [ "main", "master" ]
 
@@ -12,6 +12,12 @@ jobs:
     steps:
     - name: Checkout holomatics-sdk Repository
       uses: actions/checkout@v4
+
+    - name: Download libTessSDK Artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: libTessSDK-artifact  # Replace with the exact artifact name used during upload
+        path: .                    # Downloads directly into the root workspace directory
 
     - name: Verify Shared Library Exists
       run: |
