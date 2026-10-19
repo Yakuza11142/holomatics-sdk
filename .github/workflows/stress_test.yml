@@ -1,36 +1,25 @@
-name: Holomatics Engine Max Stress Test
+name: Download Tesseract Artifacts
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ "main", "master" ]
 
 jobs:
-  stress-test:
+  download:
     runs-on: ubuntu-latest
-    
     steps:
-    - name: Checkout holomatics-sdk Repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Download libTessSDK Artifact
-      uses: actions/download-artifact@v4
-      with:
-        name: libTessSDK-artifact  # Replace with the exact artifact name used during upload
-        path: .                    # Downloads directly into the root workspace directory
+      - name: Download Tesseract Engine Binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: tesseract-engine-binaries
+          path: .
+          repository: Yakuza11142/holomatics-sdk
+          run-id: 39293357467
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Verify Shared Library Exists
-      run: |
-        echo "[*] Checking for libTessSDK.so..."
-        ls -lh libTessSDK.so
-
-    - name: Compile Extreme Stress Harness
-      run: |
-        echo "[*] Compiling C++ stress harness..."
-        g++ -O3 -march=native -flto -std=c++17 -pthread extreme_stress_matrix.cpp -o extreme_stress_matrix -ldl
-
-    - name: Execute Maximum Hardware Stress Matrix
-      run: |
-        echo "=== Launching Max Stress Test on Holomatics Engine ==="
-        chmod +x extreme_stress_matrix
-        ./extreme_stress_matrix
+      - name: Verify downloaded files
+        run: |
+          ls -la
+          file libTessSDK.so
