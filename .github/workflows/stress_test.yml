@@ -1,0 +1,30 @@
+name: Holomatics Engine Max Stress Test
+
+on:
+  workflow_dispatch: # Allows manual triggering from the GitHub Mobile app
+  push:
+    branches: [ "main", "master" ]
+
+jobs:
+  stress-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout holomatics-sdk Repository
+      uses: actions/checkout@v4
+
+    - name: Verify Shared Library Exists
+      run: |
+        echo "[*] Checking for libTessSDK.so..."
+        ls -lh libTessSDK.so
+
+    - name: Compile Extreme Stress Harness
+      run: |
+        echo "[*] Compiling C++ stress harness..."
+        g++ -O3 -march=native -flto -std=c++17 -pthread extreme_stress_matrix.cpp -o extreme_stress_matrix -ldl
+
+    - name: Execute Maximum Hardware Stress Matrix
+      run: |
+        echo "=== Launching Max Stress Test on Holomatics Engine ==="
+        chmod +x extreme_stress_matrix
+        ./extreme_stress_matrix
