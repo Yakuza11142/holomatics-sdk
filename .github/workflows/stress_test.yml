@@ -10,10 +10,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Rust Toolchain
-        uses: dtolnay/rust-action@stable
-        with:
-          toolchain: stable
+      - name: Set up Rust Native Environment
+        run: |
+          rustup update stable
+          rustup default stable
+          rustc --version
+          cargo --version
 
       - name: Install System Build Dependencies
         run: |
@@ -68,8 +70,10 @@ jobs:
           name: tesseract-engine-binaries
           path: .
 
-      - name: Set up Environment & Rust
-        uses: dtolnay/rust-action@stable
+      - name: Set up Rust Native Environment
+        run: |
+          rustup update stable
+          rustup default stable
 
       - name: Execute Full Subsystem Stress Profile -> ${{ matrix.test-profile }}
         env:
