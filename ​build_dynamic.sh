@@ -14,8 +14,7 @@ CLANG_C="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
 CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
 INCLUDE_FLAGS="-I. -I./src"
 
-# Track generated object/library archives
-OBJECT_FILES=""
+# Track generated external library archives
 EXTERNAL_LIBS=""
 
 # ============================================================================
@@ -25,7 +24,7 @@ if [ -f "Cargo.toml" ]; then
   echo "🦀 [Detected] Rust workspace found. Compiling core..."
   rustup target add aarch64-linux-android 2>/dev/null || true
   cargo build --release --target aarch64-linux-android
-  
+
   RUST_LIB=$(find target/aarch64-linux-android/release/ -name "*.a" | head -n 1)
   if [ -n "$RUST_LIB" ]; then
     EXTERNAL_LIBS="$EXTERNAL_LIBS $RUST_LIB"
@@ -34,84 +33,61 @@ if [ -f "Cargo.toml" ]; then
 fi
 
 # ============================================================================
-# 2. C (.c)
+# 2. C / C++ EXPLICIT UNIFIED COMPILATION (Preventing Duplicate Symbols)
 # ============================================================================
-if [ -n "$(find . -maxdepth 3 -name "*.c" ! -name "TessBridge.c")" ]; then
-  echo "🔍 [Detected] C source files found. Compiling..."
-  for file in $(find . -maxdepth 3 -name "*.c" ! -name "TessBridge.c"); do
+echo "🔍 Compiling explicit unified C source modules..."
+
+C_FILES=(
+  "tesseract_unified.c"
+  "tesseract_pro.c"
+)
+
+for file in "${C_FILES[@]}"; do
+  if [ -f "$file" ]; then
     echo "🔨 Compiling C: $file"
-    $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -include tesseract_engine.h -DTESS_API="" -Wno-macro-redefined "$file" -o "${file%.c}.o"
-  done
+    $CLANG_C -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" -Wno-macro-redefined "$file" -o "${file%.c}.o"
+  else
+    echo "⚠️ Warning: Required file '$file' not found."
+  fi
+done
+
+# Compile C++ Bridge if present
+if [ -f "TessBridge.c" ]; then
+  echo "🔨 Compiling C++ Bridge: TessBridge.c"
+  $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" "TessBridge.c" -o "TessBridge.o"
+elif [ -f "src/TessBridge.cpp" ]; then
+  echo "🔨 Compiling C++ Bridge: src/TessBridge.cpp"
+  $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" "src/TessBridge.cpp" -o "src/TessBridge.o"
 fi
 
 # ============================================================================
-# 3. C++ (.cpp, .cc, .cxx)
+# 3. OTHER LANGUAGE HOOKS (Go, Python, etc.)
 # ============================================================================
-if [ -n "$(find . -maxdepth 3 \( -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" \))" ]; then
-  echo "🔍 [Detected] C++ source files found. Compiling..."
-  for file in $(find . -maxdepth 3 \( -name "*.cpp" -o -name "*.cc" -o -name "*.cxx" \)); do
-    echo "🔨 Compiling C++: $file"
-    $CLANG_CC -c -fPIC -O3 -pthread $INCLUDE_FLAGS -DTESS_API="" "$file" -o "${file%.*}.o"
-  done
-fi
-
-# ============================================================================
-# 4. SWIFT (.swift)
-# ============================================================================
-if [ -n "$(find . -maxdepth 3 -name "*.swift")" ]; then
-  echo "🍏 [Detected] Swift source files found."
-  # Swift cross-compilation hooks can be integrated here if targeting iOS/macOS frameworks
-  echo "ℹ️ Swift modules detected (handled via Xcode/Swift Package Manager)."
-fi
-
-# ============================================================================
-# 5. GO (.go)
-# ============================================================================
-if [ -n "$(find . -maxdepth 3 -name "*.go")" ]; then
+if [ -f "go.mod" ] || [ -n "$(find . -maxdepth 3 -name "*.go" 2>/dev/null)" ]; then
   echo "🐹 [Detected] Go source files found. Building C-archive..."
-  go build -buildmode=c-archive -o tessergo.a 2>/dev/null || echo "⚠️ Go build skipped or requires module init."
+  go build -buildmode=c-archive -o tessergo.a 2>/dev/null || echo "⚠️ Go build skipped."
   if [ -f "tessergo.a" ]; then
     EXTERNAL_LIBS="$EXTERNAL_LIBS tessergo.a"
   fi
 fi
 
-# ============================================================================
-# 6. C# (.cs)
-# ============================================================================
-if [ -n "$(find . -maxdepth 3 -name "*.cs")" ]; then
-  echo "#. [Detected] C# source files found. Building via dotnet..."
-  dotnet build -c Release 2>/dev/null || echo "⚠️ Dotnet build skipped."
-fi
-
-# ============================================================================
-# 7. DART (.dart)
-# ============================================================================
-if [ -n "$(find . -maxdepth 3 -name "*.dart")" ]; then
-  echo "🐦 [Detected] Dart / Flutter project files found."
-  if [ -f "pubspec.yaml" ]; then
-    echo "ℹ️ Pub package manager configuration verified."
-  fi
-fi
-
-# ============================================================================
-# 8. PYTHON (.py)
-# ============================================================================
-if [ -n "$(find . -maxdepth 3 -name "*.py")" ]; then
+if [ -n "$(find . -maxdepth 3 -name "*.py" 2>/dev/null)" ]; then
   echo "🐍 [Detected] Python scripts found."
-  python3 -m py_compile $(find . -maxdepth 3 -name "*.py") 2>/dev/null || true
+  python3 -m py_compile $(find . -maxdepth 3 -name "*.py" 2>/dev/null) 2>/dev/null || true
 fi
 
 # ============================================================================
 # FINAL UNIFIED LINKING STEP
 # ============================================================================
-ALL_OBJECTS=$(find . -maxdepth 3 -name "*.o")
+# Explicitly gather valid objects while filtering out legacy conflicting modules
+ALL_OBJECTS=$(find . -maxdepth 2 -name "*.o" ! -name "tesseract_core.o" ! -name "tesseract_engine.o")
 
 if [ -n "$ALL_OBJECTS" ] || [ -n "$EXTERNAL_LIBS" ]; then
   echo "🔨 Packaging final unified shared library: libTessSDK.so"
   $CLANG_CC -shared -fPIC -O3 -pthread \
             $ALL_OBJECTS \
             $EXTERNAL_LIBS \
-            -landroid -llog \
+            -landroid -llog -lm \
             -o libTessSDK.so
   echo "✨ Smart Polyglot Build Complete Successfully!"
 else
