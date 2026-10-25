@@ -42,7 +42,7 @@ jobs:
           if [ ! -f "src/main.rs" ]; then
             echo "Error: src/main.rs must exist in the repository root!"
             exit 1
-          }
+          fi
           echo "=== FOUND src/main.rs AS THE CORE ENGINE SOURCE ==="
 
       - name: Build Target -> ${{ matrix.target-arch }}
@@ -135,20 +135,20 @@ jobs:
 
           # Injecting explicit High-Water Mark / Max Write Ceiling limit test target matching main.rs layout
           cat << 'EOF' > tests/tesseract_infinite_fuzzer.rs
-#[test]
-fn test_max_write_high_water_mark_ceiling() {
-    let max_write_hwm = std::env::var("TESS_MAX_WRITE_HWM")
-        .unwrap_or_else(|_| "50000".to_string())
-        .parse::<usize>()
-        .unwrap_or(50000);
+          #[test]
+          fn test_max_write_high_water_mark_ceiling() {
+              let max_write_hwm = std::env::var("TESS_MAX_WRITE_HWM")
+                  .unwrap_or_else(|_| "50000".to_string())
+                  .parse::<usize>()
+                  .unwrap_or(50000);
 
-    println!("=== REACHING MAX WRITE WATERMARK CEILING: {} ===", max_write_hwm);
-    for i in 0..max_write_hwm {
-        assert!(i < max_write_hwm, "Exceeded Max Write HWM boundary at iteration {}", i);
-    }
-    println!("=== MAX WRITE CEILING REACHED AND LOCKED SUCCESSFULLY ===");
-}
-EOF
+              println!("=== REACHING MAX WRITE WATERMARK CEILING: {} ===", max_write_hwm);
+              for i in 0..max_write_hwm {
+                  assert!(i < max_write_hwm, "Exceeded Max Write HWM boundary at iteration {}", i);
+              }
+              println!("=== MAX WRITE CEILING REACHED AND LOCKED SUCCESSFULLY ===");
+          }
+          EOF
 
       - name: Execute Real-Time Pinned Stress & Max-Write HWM Ceiling -> ${{ matrix.test-profile }}
         env:
