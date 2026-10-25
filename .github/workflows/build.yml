@@ -39,43 +39,43 @@ jobs:
         run: |
           if [ ! -f "Cargo.toml" ]; then
             cat << 'EOF' > Cargo.toml
-[package]
-name = "tesseract_rust"
-version = "0.1.0"
-edition = "2021"
+          [package]
+          name = "tesseract_rust"
+          version = "0.1.0"
+          edition = "2021"
 
-[lib]
-name = "tesseract_rust"
-path = "src/lib.rs"
-crate-type = ["staticlib", "rlib"]
+          [lib]
+          name = "tesseract_rust"
+          path = "src/lib.rs"
+          crate-type = ["staticlib", "rlib"]
 
-[dependencies]
-# Zero-allocation dependencies can be added here
+          [dependencies]
+          # Zero-allocation dependencies can be added here
 
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false
-EOF
+          [profile.release]
+          opt-level = 3
+          lto = true
+          codegen-units = 1
+          panic = "abort"
+          strip = true
+          debug = false
+          EOF
           fi
           mkdir -p src
           if [ ! -f "src/lib.rs" ]; then
             cat << 'EOF' > src/lib.rs
-#![no_std]
+          #![no_std]
 
-#[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
+          #[panic_handler]
+          fn panic(_: &core::panic::PanicInfo) -> ! {
+              loop {}
+          }
 
-#[no_mangle]
-pub extern "C" fn tesseract_engine_version() -> i32 {
-    100
-}
-EOF
+          #[no_mangle]
+          pub extern "C" fn tesseract_engine_version() -> i32 {
+              100
+          }
+          EOF
           fi
 
       - name: Compile Core Rust Static Library via Cargo
