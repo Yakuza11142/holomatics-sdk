@@ -22,84 +22,79 @@ jobs:
           rustc --version
           cargo --version
 
-      - name: Install System Build Dependencies & Android NDK
+      - name: Set up Android NDK & Build Tools
         run: |
+          # Ensure ANDROID_HOME is set
+          ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+
           sudo apt-get update
           sudo apt-get install -y build-essential clang llvm curl unzip
           
-          # Install Android NDK via sdkmanager if not already present
-          echo "y" | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "ndk;26.1.10909125" || true
-
-      - name: Ensure Cargo.toml and src/main.rs Exist
-        run: |
-          if [ ! -f "Cargo.toml" ]; then
-            echo "Cargo.toml not found. Initializing library Cargo.toml..."
-            cargo init --lib --name tesseract_rust
-            # Ensure staticlib crate-type is set
-            echo '[lib]' >> Cargo.toml
-            echo 'crate-type = ["staticlib"]' >> Cargo.toml
+          # Find or install Android NDK
+          NDK_PATH=$(find "${ANDROID_HOME}/ndk" -maxdepth 1 -mindepth 1 2>/dev/null | sort -V | tail -n 1)
+          if [ -z "$NDK_PATH" ]; then
+            echo "Android NDK not found. Installing via sdkmanager..."
+            export PATH="$PATH:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/tools/bin"
+            yes | sdkmanager --licenses || true
+            sdkmanager "ndk;26.1.10909125" || true
+            NDK_PATH=$(find "${ANDROID_HOME}/ndk" -maxdepth 1 -mindepth 1 2>/dev/null | sort -V | tail -n 1)
+          fi
+          
+          if [ -z "$NDK_PATH" ]; then
+            echo "Error: Failed to locate or install Android NDK."
+            exit 1
           fi
 
+          echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
+          
+          # Configure Cargo linker for Android cross-compilation
+          TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
+
+      - name: Ensure Cargo Config and Source Exist
+        run: |
+          if [ ! -f "Cargo.toml" ]; then
+            cargo init --lib --name tesseract_rust
+            echo -e '\n[lib]\ncrate-type = ["staticlib"]' >> Cargo.toml
+          fi
           mkdir -p src
           if [ ! -f "src/lib.rs" ] && [ ! -f "src/main.rs" ]; then
-            echo "Rust source not found. Creating minimal valid entry point..."
-            cat << 'EOF' > src/lib.rs
-#![no_std]
-#![no_main]
-#![deny_warnings]
-extern crate alloc;
-
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! { loop {} }
-EOF
+            echo '#![no_std]' > src/lib.rs
+            echo '#![no_main]' >> src/lib.rs
+            echo '#[panic_handler] fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }' >> src/lib.rs
           fi
 
       - name: Compile Core Rust Static Library via Cargo
         run: |
           cargo build --release --target aarch64-linux-android
 
-      - name: Build Cross-Aligned Android Shared Object Library (libTessSDK.so)
+      - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
         run: |
-          # Locate NDK Path dynamically
-          NDK_PATH=$(find ${ANDROID_HOME}/ndk -maxdepth 1 -mindepth 1 | sort -V | tail -n 1)
-          if [ -z "$NDK_PATH" ]; then
-            NDK_PATH="${ANDROID_NDK_LATEST_HOME:-${ANDROID_HOME}/ndk-bundle}"
-          fi
-
-          echo "Utilizing Android NDK located at: ${NDK_PATH}"
-
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           CC_COMPILER="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
           CXX_COMPILER="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
 
-          if [ ! -f "$CXX_COMPILER" ]; then
-            echo "Error: Android NDK Clang compiler not found at $CXX_COMPILER"
-            exit 1
-          fi
-
-          CORE_C_FILES=$(find . -maxdepth 2 -type f -name "tesseract_*.c" 2>/dev/null || true)
-
           OBJECT_FILES=""
-          for file in $CORE_C_FILES; do
-            echo "Cross-compiling C file: $file..."
-            "$CC_COMPILER" -c -fPIC -O3 -I. "$file" -o "${file%.c}.o"
-            OBJECT_FILES="$OBJECT_FILES ${file%.c}.o"
+          for file in $(find . -maxdepth 2 -type f -name "tesseract_*.c" 2>/dev/null || true); do
+            if [ -n "$file" ]; then
+              "$CC_COMPILER" -c -fPIC -O3 -I. "$file" -o "${file%.c}.o"
+              OBJECT_FILES="$OBJECT_FILES ${file%.c}.o"
+            fi
           done
 
           if [ -f "TessBridge.c" ]; then
-            echo "Cross-compiling TessBridge.c..."
             "$CXX_COMPILER" -c -fPIC -O3 -I. TessBridge.c -o TessBridge.o
             OBJECT_FILES="$OBJECT_FILES TessBridge.o"
           fi
 
-          # Find the compiled Rust static library (.a)
           RUST_STATIC_LIB=$(find target/aarch64-linux-android/release -name "*.a" | head -n 1)
+          
           if [ -z "$RUST_STATIC_LIB" ]; then
-            echo "Error: Rust static library not found in target/aarch64-linux-android/release/"
+            echo "Error: Rust static library (.a) not found in target directory!"
             exit 1
           fi
 
-          echo "Packaging final unified shared library: libTessSDK.so"
           "$CXX_COMPILER" -shared -fPIC -O3 \
                     $OBJECT_FILES \
                     "$RUST_STATIC_LIB" \
