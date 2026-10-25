@@ -5,6 +5,7 @@ edition = "2021"
 
 [lib]
 name = "tesseract_rust"
+path = "src/main.rs"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
