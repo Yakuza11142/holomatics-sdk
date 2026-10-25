@@ -1,7 +1,7 @@
 /*
  * File: queue.c
- * Target: Universal Ultra-Performance Lock-Free Command Queue Engine[span_3](start_span)[span_3](end_span)
- * Features: Ticket-Based MPMC Ring Buffer, Cache-Line Isolation, Zero Allocation Hot Loop[span_4](start_span)[span_4](end_span).
+ * Target: Universal Ultra-Performance Lock-Free Command Queue Engine
+ * Features: Ticket-Based MPMC Ring Buffer, Cache-Line Isolation, Zero Allocation Hot Loop.
  */
 
 #include "tesseract_engine.h"
@@ -14,11 +14,14 @@
 #define RING_BUFFER_SIZE 256
 #define RING_BUFFER_MASK (RING_BUFFER_SIZE - 1)
 
+#ifndef TESS_RENDER_COMMAND_DEFINED
+#define TESS_RENDER_COMMAND_DEFINED
 typedef struct {
     uint32_t command_id;
     float delta_time;
     TessMatrix4x4 payload_matrix;
 } TessRenderCommand;
+#endif
 
 typedef struct {
     TessRenderCommand command;
