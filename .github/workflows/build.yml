@@ -15,40 +15,23 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Rust Toolchain & Android Target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: aarch64-linux-android
+
+      - name: Set up Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26b
+          link-to-sdk: true
+
+      - name: Configure Cargo Linker for Android
         run: |
-          rustup update stable
-          rustup default stable
-          rustup target add aarch64-linux-android
-          rustc --version
-          cargo --version
-
-      - name: Set up Android NDK & Build Tools
-        run: |
-          # Ensure ANDROID_HOME is set
-          ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang llvm curl unzip
-          
-          # Find or install Android NDK
-          NDK_PATH=$(find "${ANDROID_HOME}/ndk" -maxdepth 1 -mindepth 1 2>/dev/null | sort -V | tail -n 1)
-          if [ -z "$NDK_PATH" ]; then
-            echo "Android NDK not found. Installing via sdkmanager..."
-            export PATH="$PATH:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/tools/bin"
-            yes | sdkmanager --licenses || true
-            sdkmanager "ndk;26.1.10909125" || true
-            NDK_PATH=$(find "${ANDROID_HOME}/ndk" -maxdepth 1 -mindepth 1 2>/dev/null | sort -V | tail -n 1)
-          fi
-          
-          if [ -z "$NDK_PATH" ]; then
-            echo "Error: Failed to locate or install Android NDK."
-            exit 1
-          fi
-
+          NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
           echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
           
-          # Configure Cargo linker for Android cross-compilation
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
 
@@ -61,7 +44,7 @@ jobs:
           mkdir -p src
           if [ ! -f "src/lib.rs" ] && [ ! -f "src/main.rs" ]; then
             echo '#![no_std]' > src/lib.rs
-            echo '#![no_main]' >> src/lib.rs
+            # Note: #![no_main] is omitted because staticlibs do not have entry points
             echo '#[panic_handler] fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }' >> src/lib.rs
           fi
 
@@ -77,7 +60,7 @@ jobs:
 
           OBJECT_FILES=""
           for file in $(find . -maxdepth 2 -type f -name "tesseract_*.c" 2>/dev/null || true); do
-            if [ -n "$file" ]; then
+            if [ -n "$file" ] && [ -f "$file" ]; then
               "$CC_COMPILER" -c -fPIC -O3 -I. "$file" -o "${file%.c}.o"
               OBJECT_FILES="$OBJECT_FILES ${file%.c}.o"
             fi
