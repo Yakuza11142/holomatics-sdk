@@ -35,47 +35,83 @@ jobs:
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
 
-      - name: Ensure Cargo Config and Source Exist
+      - name: Ensure Cargo Config, Headers, and Source Exist
         run: |
           if [ ! -f "Cargo.toml" ]; then
             cat << 'EOF' > Cargo.toml
-          [package]
-          name = "tesseract_rust"
-          version = "0.1.0"
-          edition = "2021"
+[package]
+name = "tesseract_rust"
+version = "0.1.0"
+edition = "2021"
 
-          [lib]
-          name = "tesseract_rust"
-          path = "src/lib.rs"
-          crate-type = ["staticlib", "rlib"]
+[lib]
+name = "tesseract_rust"
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
 
-          [dependencies]
-          # Zero-allocation dependencies can be added here
+[dependencies]
 
-          [profile.release]
-          opt-level = 3
-          lto = true
-          codegen-units = 1
-          panic = "abort"
-          strip = true
-          debug = false
-          EOF
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+EOF
           fi
+
           mkdir -p src
           if [ ! -f "src/lib.rs" ]; then
             cat << 'EOF' > src/lib.rs
-          #![no_std]
+#![no_std]
 
-          #[panic_handler]
-          fn panic(_: &core::panic::PanicInfo) -> ! {
-              loop {}
-          }
+#[panic_handler]
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
 
-          #[no_mangle]
-          pub extern "C" fn tesseract_engine_version() -> i32 {
-              100
-          }
-          EOF
+#[no_mangle]
+pub extern "C" fn tesseract_engine_version() -> i32 {
+    100
+}
+EOF
+          fi
+
+          if [ ! -f "tesseract_engine.h" ] && [ ! -f "src/tesseract_engine.h" ]; then
+            cat << 'EOF' > tesseract_engine.h
+#ifndef TESSERACT_ENGINE_H
+#define TESSERACT_ENGINE_H
+
+#include <stdint.h>
+#include <stdbool.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct TesseractContext TesseractContext;
+
+#ifndef TESS_MATRIX4X4_DEFINED
+#define TESS_MATRIX4X4_DEFINED
+typedef struct {
+    float m[16];
+} TessMatrix4x4;
+#endif
+
+TesseractContext* tess_create(void);
+void tess_destroy(TesseractContext* ctx);
+int32_t tess_process_frame(TesseractContext* ctx, float delta_time);
+int32_t tess_transform_vector(TesseractContext* ctx, const float* in_vec3, float* out_vec3);
+int32_t tess_get_matrix(TesseractContext* ctx, TessMatrix4x4* out_matrix);
+int32_t tess_configure_json(TesseractContext* ctx, const char* json_str);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // TESSERACT_ENGINE_H
+EOF
           fi
 
       - name: Compile Core Rust Static Library via Cargo
@@ -91,13 +127,13 @@ jobs:
           OBJECT_FILES=""
           for file in $(find . -maxdepth 2 -type f -name "tesseract_*.c" 2>/dev/null || true); do
             if [ -n "$file" ] && [ -f "$file" ]; then
-              "$CC_COMPILER" -c -fPIC -O3 -I. "$file" -o "${file%.c}.o"
+              "$CC_COMPILER" -c -fPIC -O3 -I. -Isrc -Iinclude "$file" -o "${file%.c}.o"
               OBJECT_FILES="$OBJECT_FILES ${file%.c}.o"
             fi
           done
 
           if [ -f "TessBridge.c" ]; then
-            "$CXX_COMPILER" -c -fPIC -O3 -I. TessBridge.c -o TessBridge.o
+            "$CXX_COMPILER" -c -fPIC -O3 -I. -Isrc -Iinclude TessBridge.c -o TessBridge.o
             OBJECT_FILES="$OBJECT_FILES TessBridge.o"
           fi
 
