@@ -125,11 +125,25 @@ jobs:
 
           OBJECT_FILES=""
           
-          for file in tesseract_unified.c tesseract_pro.c; do
+          C_MODULES=(
+            "tesseract_unified.c"
+            "tesseract_pro.c"
+            "velo.c"
+            "tesseract_concurrency.c"
+            "tesseract_occlusion.c"
+            "tesseract_ops.c"
+            "tesseract_lighting.c"
+            "tessearct_security.c"
+            "tesseract_queue.c"
+          )
+
+          for file in "${C_MODULES[@]}"; do
             if [ -f "$file" ]; then
               echo "🔨 Compiling C module: $file"
               "$CC_COMPILER" -c -fPIC -O3 -I. -Isrc -Iinclude "$file" -o "${file%.c}.o"
               OBJECT_FILES="$OBJECT_FILES ${file%.c}.o"
+            else
+              echo "ℹ️ Skipping optional/missing module: $file"
             fi
           done
 
@@ -155,6 +169,7 @@ jobs:
                     "$RUST_STATIC_LIB" \
                     -landroid -llog -lm \
                     -o libTessSDK.so
+          echo "Successfully built libTessSDK.so with all custom modules!"
 
       - name: Verify Exported Library Symbols
         run: |
