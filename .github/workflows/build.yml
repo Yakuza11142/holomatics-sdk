@@ -124,15 +124,22 @@ jobs:
           CXX_COMPILER="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
 
           OBJECT_FILES=""
-          for file in $(find . -maxdepth 2 -type f -name "tesseract_*.c" 2>/dev/null || true); do
-            if [ -n "$file" ] && [ -f "$file" ]; then
+          
+          for file in tesseract_unified.c tesseract_pro.c; do
+            if [ -f "$file" ]; then
+              echo "🔨 Compiling C module: $file"
               "$CC_COMPILER" -c -fPIC -O3 -I. -Isrc -Iinclude "$file" -o "${file%.c}.o"
               OBJECT_FILES="$OBJECT_FILES ${file%.c}.o"
             fi
           done
 
           if [ -f "TessBridge.c" ]; then
+            echo "🔨 Compiling C++ Bridge: TessBridge.c"
             "$CXX_COMPILER" -c -fPIC -O3 -I. -Isrc -Iinclude TessBridge.c -o TessBridge.o
+            OBJECT_FILES="$OBJECT_FILES TessBridge.o"
+          elif [ -f "src/TessBridge.cpp" ]; then
+            echo "🔨 Compiling C++ Bridge: src/TessBridge.cpp"
+            "$CXX_COMPILER" -c -fPIC -O3 -I. -Isrc -Iinclude src/TessBridge.cpp -o TessBridge.o
             OBJECT_FILES="$OBJECT_FILES TessBridge.o"
           fi
 
@@ -143,8 +150,6 @@ jobs:
             exit 1
           fi
 
-          # FIX: Removed non-existent `-lpthread` library flag. 
-          # Android's Bionic libc includes pthread support directly.
           "$CXX_COMPILER" -shared -fPIC -O3 \
                     $OBJECT_FILES \
                     "$RUST_STATIC_LIB" \
