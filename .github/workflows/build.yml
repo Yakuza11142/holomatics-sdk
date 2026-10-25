@@ -1,4 +1,3 @@
-
 name: Tesseract Engine Compiler & Shared Object Build
 
 on:
@@ -39,79 +38,79 @@ jobs:
         run: |
           if [ ! -f "Cargo.toml" ]; then
             cat << 'EOF' > Cargo.toml
-[package]
-name = "tesseract_rust"
-version = "0.1.0"
-edition = "2021"
+          [package]
+          name = "tesseract_rust"
+          version = "0.1.0"
+          edition = "2021"
 
-[lib]
-name = "tesseract_rust"
-path = "src/lib.rs"
-crate-type = ["staticlib", "rlib"]
+          [lib]
+          name = "tesseract_rust"
+          path = "src/lib.rs"
+          crate-type = ["staticlib", "rlib"]
 
-[dependencies]
+          [dependencies]
 
-[profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-debug = false
-EOF
+          [profile.release]
+          opt-level = 3
+          lto = true
+          codegen-units = 1
+          panic = "abort"
+          strip = true
+          debug = false
+          EOF
           fi
 
           mkdir -p src
           if [ ! -f "src/lib.rs" ]; then
             cat << 'EOF' > src/lib.rs
-#![no_std]
+          #![no_std]
 
-#[panic_handler]
-fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
+          #[panic_handler]
+          fn panic(_: &core::panic::PanicInfo) -> ! {
+              loop {}
+          }
 
-#[no_mangle]
-pub extern "C" fn tesseract_engine_version() -> i32 {
-    100
-}
-EOF
+          #[no_mangle]
+          pub extern "C" fn tesseract_engine_version() -> i32 {
+              100
+          }
+          EOF
           fi
 
           if [ ! -f "tesseract_engine.h" ] && [ ! -f "src/tesseract_engine.h" ]; then
             cat << 'EOF' > tesseract_engine.h
-#ifndef TESSERACT_ENGINE_H
-#define TESSERACT_ENGINE_H
+          #ifndef TESSERACT_ENGINE_H
+          #define TESSERACT_ENGINE_H
 
-#include <stdint.h>
-#include <stdbool.h>
+          #include <stdint.h>
+          #include <stdbool.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
 
-typedef struct TesseractContext TesseractContext;
+          typedef struct TesseractContext TesseractContext;
 
-#ifndef TESS_MATRIX4X4_DEFINED
-#define TESS_MATRIX4X4_DEFINED
-typedef struct {
-    float m[16];
-} TessMatrix4x4;
-#endif
+          #ifndef TESS_MATRIX4X4_DEFINED
+          #define TESS_MATRIX4X4_DEFINED
+          typedef struct {
+              float m[16];
+          } TessMatrix4x4;
+          #endif
 
-TesseractContext* tess_create(void);
-void tess_destroy(TesseractContext* ctx);
-int32_t tess_process_frame(TesseractContext* ctx, float delta_time);
-int32_t tess_transform_vector(TesseractContext* ctx, const float* in_vec3, float* out_vec3);
-int32_t tess_get_matrix(TesseractContext* ctx, TessMatrix4x4* out_matrix);
-int32_t tess_configure_json(TesseractContext* ctx, const char* json_str);
+          TesseractContext* tess_create(void);
+          void tess_destroy(TesseractContext* ctx);
+          int32_t tess_process_frame(TesseractContext* ctx, float delta_time);
+          int32_t tess_transform_vector(TesseractContext* ctx, const float* in_vec3, float* out_vec3);
+          int32_t tess_get_matrix(TesseractContext* ctx, TessMatrix4x4* out_matrix);
+          int32_t tess_configure_json(TesseractContext* ctx, const char* json_str);
 
-#ifdef __cplusplus
-}
-#endif
+          #ifdef __cplusplus
+          }
+          #endif
 
-#endif // TESSERACT_ENGINE_H
-EOF
+          #endif // TESSERACT_ENGINE_H
+          EOF
           fi
 
       - name: Compile Core Rust Static Library via Cargo
