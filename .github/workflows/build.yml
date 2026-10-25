@@ -31,7 +31,6 @@ jobs:
         run: |
           NDK_PATH="${{ steps.setup-ndk.outputs.ndk-path }}"
           echo "NDK_PATH=$NDK_PATH" >> $GITHUB_ENV
-          
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/bin/aarch64-linux-android24-clang" >> $GITHUB_ENV
 
@@ -138,7 +137,7 @@ EOF
           fi
 
           RUST_STATIC_LIB=$(find target/aarch64-linux-android/release -name "*.a" | head -n 1)
-          
+
           if [ -z "$RUST_STATIC_LIB" ]; then
             echo "Error: Rust static library (.a) not found in target directory!"
             exit 1
