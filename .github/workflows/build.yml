@@ -55,7 +55,7 @@ jobs:
           lto = true
           codegen-units = 1
           panic = "abort"
-          strip = true
+          strip = false
           debug = false
           EOF
           fi
@@ -117,7 +117,7 @@ jobs:
         run: |
           cargo build --release --target aarch64-linux-android
 
-      - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so) - Ultra Minified
+      - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so) - Preserving Dynamic Symbols
         run: |
           TOOLCHAIN="$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64"
           CC_COMPILER="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
@@ -139,8 +139,8 @@ jobs:
 
           for file in "${C_MODULES[@]}"; do
             if [ -f "$file" ]; then
-              echo "🔨 Compiling (Lean) C module: $file"
-              "$CC_COMPILER" -c -fPIC -Oz -flto -ffunction-sections -fdata-sections -fvisibility=hidden -I. -Isrc -Iinclude "$file" -o "${file%.c}.o"
+              echo "🔨 Compiling C module: $file"
+              "$CC_COMPILER" -c -fPIC -Oz -flto -ffunction-sections -fdata-sections -I. -Isrc -Iinclude "$file" -o "${file%.c}.o"
               OBJECT_FILES="$OBJECT_FILES ${file%.c}.o"
             else
               echo "ℹ️ Skipping optional/missing module: $file"
@@ -148,12 +148,12 @@ jobs:
           done
 
           if [ -f "TessBridge.c" ]; then
-            echo "🔨 Compiling (Lean) C++ Bridge: TessBridge.c"
-            "$CXX_COMPILER" -c -fPIC -Oz -flto -ffunction-sections -fdata-sections -fvisibility=hidden -I. -Isrc -Iinclude TessBridge.c -o TessBridge.o
+            echo "🔨 Compiling C++ Bridge: TessBridge.c"
+            "$CXX_COMPILER" -c -fPIC -Oz -flto -ffunction-sections -fdata-sections -I. -Isrc -Iinclude TessBridge.c -o TessBridge.o
             OBJECT_FILES="$OBJECT_FILES TessBridge.o"
           elif [ -f "src/TessBridge.cpp" ]; then
-            echo "🔨 Compiling (Lean) C++ Bridge: src/TessBridge.cpp"
-            "$CXX_COMPILER" -c -fPIC -Oz -flto -ffunction-sections -fdata-sections -fvisibility=hidden -I. -Isrc -Iinclude src/TessBridge.cpp -o TessBridge.o
+            echo "🔨 Compiling C++ Bridge: src/TessBridge.cpp"
+            "$CXX_COMPILER" -c -fPIC -Oz -flto -ffunction-sections -fdata-sections -I. -Isrc -Iinclude src/TessBridge.cpp -o TessBridge.o
             OBJECT_FILES="$OBJECT_FILES TessBridge.o"
           fi
 
@@ -164,19 +164,19 @@ jobs:
             exit 1
           fi
 
+          # Link with gc-sections while retaining dynamic export symbols (.dynsym)
           "$CXX_COMPILER" -shared -fPIC -Oz -flto \
                     -Wl,--gc-sections \
                     -Wl,--exclude-libs,ALL \
-                    -Wl,--strip-all \
-                    -Wl,--build-id=none \
                     $OBJECT_FILES \
                     "$RUST_STATIC_LIB" \
                     -landroid -llog -lm \
                     -o libTessSDK.so
 
-          "$TOOLCHAIN/bin/llvm-strip" --strip-all libTessSDK.so
+          # Strip unneeded local symbols without wiping the dynamic symbol table
+          "$TOOLCHAIN/bin/llvm-strip" --strip-unneeded libTessSDK.so
 
-          echo "Successfully built ultra-minified libTessSDK.so!"
+          echo "Successfully built optimized libTessSDK.so with dynamic entrypoints preserved!"
 
       - name: Verify Exported Library Symbols
         run: |
