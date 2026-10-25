@@ -5,11 +5,11 @@ edition = "2021"
 
 [lib]
 name = "tesseract_rust"
-path = "src/main.rs"
+path = "src/lib.rs"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-# Standard dependencies can be added here if needed
+# Zero-allocation dependencies can be added here
 
 [profile.release]
 opt-level = 3
