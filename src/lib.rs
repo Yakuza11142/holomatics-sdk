@@ -1,6 +1,6 @@
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(any(test, kani)), no_std)]
 
-#[cfg(not(test))]
+#[cfg(not(any(test, kani)))]
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     loop {}
