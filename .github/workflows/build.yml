@@ -1,3 +1,4 @@
+
 name: Tesseract Engine Compiler & Shared Object Build
 
 on:
@@ -143,10 +144,12 @@ EOF
             exit 1
           fi
 
+          # FIX: Removed non-existent `-lpthread` library flag. 
+          # Android's Bionic libc includes pthread support directly.
           "$CXX_COMPILER" -shared -fPIC -O3 \
                     $OBJECT_FILES \
                     "$RUST_STATIC_LIB" \
-                    -landroid -llog -lm -lpthread \
+                    -landroid -llog -lm \
                     -o libTessSDK.so
 
       - name: Verify Exported Library Symbols
