@@ -36,14 +36,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential cmake pkg-config libclang-dev binutils valgrind clang lld qemu-user-static
 
-      - name: Verify Workspace Layout (src/main.rs Target)
+      - name: Verify Workspace Layout (src/lib.rs Library Target)
         run: |
           mkdir -p tests dist src
-          if [ ! -f "src/main.rs" ]; then
-            echo "Error: src/main.rs must exist in the repository root!"
+          if [ ! -f "src/lib.rs" ]; then
+            echo "Error: src/lib.rs must exist in the repository root!"
             exit 1
           fi
-          echo "=== FOUND src/main.rs AS THE CORE ENGINE SOURCE ==="
+          echo "=== FOUND src/lib.rs AS THE CORE ENGINE SOURCE ==="
 
       - name: Build Target -> ${{ matrix.target-arch }}
         run: |
@@ -62,12 +62,10 @@ jobs:
           elif [ -f "target/release/libtesseract_rust.so" ]; then
             cp target/release/libtesseract_rust.so dist/${{ matrix.target-arch }}/libTessSDK.so
           elif [ -f "target/release/libtesseract_rust.a" ]; then
-            # Compile shared object wrapper from static archive and C stubs if present
             gcc -O3 -shared -fPIC -std=c11 -march=native \
               target/release/libtesseract_rust.a \
               -o dist/${{ matrix.target-arch }}/libTessSDK.so -lm -lpthread || true
           else
-            # Fallback direct compilation bundle
             gcc -O3 -shared -fPIC -std=c11 -march=native \
               -o dist/${{ matrix.target-arch }}/libTessSDK.so -lm -lpthread || true
           fi
@@ -133,7 +131,6 @@ jobs:
           sudo apt-get update && sudo apt-get install -y valgrind util-linux linux-tools-common linux-tools-generic
           mkdir -p tests src
 
-          # Injecting explicit High-Water Mark / Max Write Ceiling limit test target matching main.rs layout
           cat << 'EOF' > tests/tesseract_infinite_fuzzer.rs
           #[test]
           fn test_max_write_high_water_mark_ceiling() {
