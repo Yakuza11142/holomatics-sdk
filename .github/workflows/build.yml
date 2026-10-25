@@ -38,14 +38,44 @@ jobs:
       - name: Ensure Cargo Config and Source Exist
         run: |
           if [ ! -f "Cargo.toml" ]; then
-            cargo init --lib --name tesseract_rust
-            echo -e '\n[lib]\ncrate-type = ["staticlib"]' >> Cargo.toml
+            cat << 'EOF' > Cargo.toml
+[package]
+name = "tesseract_rust"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "tesseract_rust"
+path = "src/lib.rs"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# Zero-allocation dependencies can be added here
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+debug = false
+EOF
           fi
           mkdir -p src
-          if [ ! -f "src/lib.rs" ] && [ ! -f "src/main.rs" ]; then
-            echo '#![no_std]' > src/lib.rs
-            # Note: #![no_main] is omitted because staticlibs do not have entry points
-            echo '#[panic_handler] fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }' >> src/lib.rs
+          if [ ! -f "src/lib.rs" ]; then
+            cat << 'EOF' > src/lib.rs
+#![no_std]
+
+#[panic_handler]
+fn panic(_: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
+
+#[no_mangle]
+pub extern "C" fn tesseract_engine_version() -> i32 {
+    100
+}
+EOF
           fi
 
       - name: Compile Core Rust Static Library via Cargo
