@@ -14,16 +14,23 @@ jobs:
       - name: Checkout Codebase
         uses: actions/checkout@v4
 
-      - name: Install Android NDK & Rust Toolchain Targets
+      - name: Set up Rust Toolchain & Android Target
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup target add aarch64-linux-android
+          rustc --version
+          cargo --version
+
+      - name: Install System Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang llvm
-          rustup target add aarch64-linux-android
 
-      - name: Compile Core Rust Spatial Module (tesseract_ui.rs)
+      - name: Compile Core Rust Static Library via Cargo
         run: |
-          # Compile your pure Rust module directly into a high-performance static library object
-          rustc --target aarch64-linux-android -O --crate-type=staticlib tesseract_ui.rs -o libtesseract_ui.a
+          # Compiles your src/main.rs (configured as staticlib in Cargo.toml) for Android ARM64
+          cargo build --release --target aarch64-linux-android
 
       - name: Build Cross-Compiled Android Shared Object Library (libTessSDK.so)
         run: |
@@ -40,7 +47,7 @@ jobs:
           CLANG_C="$TOOLCHAIN/bin/aarch64-linux-android24-clang"
           CLANG_CC="$TOOLCHAIN/bin/aarch64-linux-android24-clang++"
           
-          # 3. Explicitly link search paths to eliminate recursive path conflicts
+          # 3. Explicitly link search paths
           INCLUDE_FLAGS="-I. -I./src"
           
           # 4. Gather active native C engine core modules while strictly dropping old legacy duplicate files
@@ -71,9 +78,10 @@ jobs:
           OBJECT_FILES=$(find . -maxdepth 2 -type f -name "*.o")
           
           echo "🔨 Packaging final unified shared library: libTessSDK.so"
-          # Link all valid object modules and your Rust static library into your final framework package
+          # Link all valid object modules and your Cargo-built Rust static library into your final framework package
           $CLANG_CC -shared -fPIC -O3 -pthread \
-                    $OBJECT_FILES -L. -ltesseract_ui \
+                    $OBJECT_FILES \
+                    -Ltarget/aarch64-linux-android/release -ltesseract_rust \
                     -landroid -llog \
                     -o libTessSDK.so
 
