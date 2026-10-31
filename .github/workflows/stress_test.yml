@@ -52,7 +52,7 @@ jobs:
           if [ "${{ matrix.target-arch }}" = "wasm32-unknown-unknown" ]; then
             cargo build --release --target wasm32-unknown-unknown
           elif [ "${{ matrix.target-arch }}" = "aarch64-linux-android" ]; then
-            cargo build --release --target aarch64-linux-android || cargo build --release
+            cargo build --release --target aarch64-linux-android
           else
             cargo build --release --lib
           fi
@@ -179,11 +179,11 @@ jobs:
 
       - name: Execute Loom Model Checker for Exhaustive Thread Interleavings
         env:
-          RUSTFLAGS: "--cfg loom"
+          RUSTFLAGS: "--cfg loom -C panic=abort"
         run: |
           echo "=== RUNNING LOOM EXHAUSTIVE THREAD INTERLEAVING VERIFICATION ==="
           cargo test --test tesseract_comprehensive_suite test_loom_concurrency_interleaving \
-            --target x86_64-unknown-linux-gnu -Zbuild-std || echo "Loom check completed."
+            --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc,std,panic_abort -Zbuild-std-features=panic_immediate_abort || echo "Loom check completed."
 
   # STEP 7: KANI FORMAL VERIFICATION & PROOF AUDIT
   kani-formal-verification-audit:
@@ -242,7 +242,7 @@ jobs:
           echo "=== EXECUTING QEMU ARM64 FULL-SYSTEM TARGET VERIFICATION ==="
           qemu-aarch64-static --version || echo "QEMU ready."
 
-  # STEP 10: COMPREHENSIVE HARDWARE STRESS MATRIX & HWM CEILING (Independent of experimental failures)
+  # STEP 10: COMPREHENSIVE HARDWARE STRESS MATRIX & HWM CEILING
   comprehensive-hardware-stress-matrix:
     needs: [cumulative-multi-target-build, security-and-supply-chain-audit]
     runs-on: ubuntu-latest
