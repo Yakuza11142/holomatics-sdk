@@ -18,3 +18,6 @@ codegen-units = 1
 panic = "abort"
 strip = true
 debug = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)', 'cfg(loom)'] }
