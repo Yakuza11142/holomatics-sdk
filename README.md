@@ -56,5 +56,5 @@ cmake -DCMAKE_BUILD_TYPE=Release -DANDROID_ABI=arm64-v8a ..
 make -j$(nproc)
 
 📄 License & Commercial Acquisition
-This repository contains proprietary engineering intellectual property. For full commercial licensing inquiries, core source code acquisition parameters, or strategic IP transfer queries, please reach out to the project architect via verified LinkedIn channels or via the repository contact registry.
+This repository contains proprietary engineering intellectual property. For full commercial licensing inquiries, core source code acquisition parameters, or strategic IP transfer queries, please reach out to the project architect via verified LinkedIn channels or via the repository contact registry or via email (peterogorry6@gmail.com).
 
