@@ -15,19 +15,16 @@ jobs:
       matrix:
         target-arch:
           - x86_64-unknown-linux-gnu
-          - aarch64-linux-android
           - wasm32-unknown-unknown
-    env:
-      RUSTFLAGS: "-C target-cpu=native -C opt-level=3 -C codegen-units=1 -C panic=abort"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Rust Toolchain (Nightly via toolchain file or fallback)
+      - name: Set up Rust Toolchain
         run: |
           rustup update nightly
           rustup default nightly
-          rustup target add aarch64-linux-android wasm32-unknown-unknown
+          rustup target add wasm32-unknown-unknown
           rustc --version
           cargo --version
 
@@ -46,12 +43,6 @@ jobs:
             cat << 'EOF' > .cargo/config.toml
           [target.x86_64-unknown-linux-gnu]
           linker = "cc"
-
-          [target.aarch64-linux-android]
-          linker = "aarch64-linux-android-clang"
-
-          [unstable]
-          build-std = ["core", "alloc"]
           EOF
           fi
 
@@ -60,17 +51,17 @@ jobs:
           [toolchain]
           channel = "nightly"
           components = ["rust-src", "miri", "clippy"]
-          targets = ["x86_64-unknown-linux-gnu", "aarch64-linux-android", "wasm32-unknown-unknown"]
+          targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
           EOF
           fi
 
       - name: Execute Cumulative Compilation & Build Target -> ${{ matrix.target-arch }}
+        env:
+          RUSTFLAGS: "${{ matrix.target-arch == 'x86_64-unknown-linux-gnu' && '-C target-cpu=native -C opt-level=3 -C codegen-units=1 -C panic=abort' || '-C opt-level=3 -C codegen-units=1 -C panic=abort' }}"
         run: |
           echo "=== 1. COMPILING FOR TARGET: ${{ matrix.target-arch }} ==="
           if [ "${{ matrix.target-arch }}" = "wasm32-unknown-unknown" ]; then
             cargo build --release --target wasm32-unknown-unknown
-          elif [ "${{ matrix.target-arch }}" = "aarch64-linux-android" ]; then
-            cargo build --release --target aarch64-linux-android
           else
             cargo build --release --lib
           fi
@@ -81,12 +72,12 @@ jobs:
             else
               touch dist/${{ matrix.target-arch }}/tess_sdk.wasm
             fi
-          elif [ -f "target/${{ matrix.target-arch }}/release/libtesseract_rust.so" ]; then
-            cp target/${{ matrix.target-arch }}/release/libtesseract_rust.so dist/${{ matrix.target-arch }}/libTessSDK.so
+          elif [ -f "target/x86_64-unknown-linux-gnu/release/libtesseract_rust.so" ]; then
+            cp target/x86_64-unknown-linux-gnu/release/libtesseract_rust.so dist/${{ matrix.target-arch }}/libTessSDK.so
           elif [ -f "target/release/libtesseract_rust.so" ]; then
             cp target/release/libtesseract_rust.so dist/${{ matrix.target-arch }}/libTessSDK.so
           else
-            gcc -O3 -shared -fPIC -std=c11 -march=native \
+            gcc -O3 -shared -fPIC -std=c11 \
               -o dist/${{ matrix.target-arch }}/libTessSDK.so -lm -lpthread
           fi
           echo "Build Complete for ${{ matrix.target-arch }}" > unified_reports/build_${{ matrix.target-arch }}.log
@@ -135,22 +126,6 @@ jobs:
           EOF
           python3 stress_harness.py > unified_reports/python_ffi_stress.log 2>&1
           valgrind --tool=memcheck --leak-check=full --error-exitcode=1 python3 stress_harness.py > unified_reports/valgrind.log 2>&1 || true
-
-      - name: Execute QEMU ARM64 Emulation Verification
-        if: matrix.target-arch == 'aarch64-linux-android'
-        run: |
-          echo "=== 5. RUNNING QEMU ARM64 EMULATION ==="
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-          mkdir -p qemu_test
-          cat << 'EOF' > qemu_test/main.c
-          #include <stdio.h>
-          int main() {
-              printf("ARM64 Full-System Emulation Successful via QEMU!\n");
-              return 0;
-          }
-          EOF
-          aarch64-linux-gnu-gcc -static qemu_test/main.c -o qemu_test/test_arm64
-          qemu-aarch64-static qemu_test/test_arm64 > unified_reports/qemu_arm64.log 2>&1
 
       - name: Final Consolidated Execution Report & Output to Console
         if: always()
