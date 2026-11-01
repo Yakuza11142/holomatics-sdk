@@ -20,11 +20,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Rust Toolchain
+      - name: Set up Rust Toolchain & Components
         run: |
           rustup update nightly
           rustup default nightly
-          rustup target add wasm32-unknown-unknown
+          rustup target add wasm32-unknown-unknown x86_64-unknown-linux-gnu
+          rustup component add rust-src miri clippy
           rustc --version
           cargo --version
 
@@ -36,24 +37,19 @@ jobs:
       - name: Initialize Unified Report Directory
         run: mkdir -p unified_reports dist/${{ matrix.target-arch }}
 
-      - name: Ensure Project Configuration Files Exist (.cargo/config.toml & rust-toolchain.toml)
+      - name: Ensure Project Configuration Files Exist (.cargo/config.toml)
         run: |
           mkdir -p .cargo
-          if [ ! -f ".cargo/config.toml" ]; then
-            cat << 'EOF' > .cargo/config.toml
-          [target.x86_64-unknown-linux-gnu]
-          linker = "cc"
-          EOF
-          fi
+          cat << 'EOF' > .cargo/config.toml
+          [build]
+          target = "x86_64-unknown-linux-gnu"
 
-          if [ ! -f "rust-toolchain.toml" ]; then
-            cat << 'EOF' > rust-toolchain.toml
-          [toolchain]
-          channel = "nightly"
-          components = ["rust-src", "miri", "clippy"]
-          targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
+          [unstable]
+          build-std = ["core", "alloc"]
+
+          [target.x86_64-unknown-linux-gnu]
+          rustflags = ["-C", "panic=abort"]
           EOF
-          fi
 
       - name: Execute Cumulative Compilation & Build Target -> ${{ matrix.target-arch }}
         env:
@@ -88,7 +84,7 @@ jobs:
           echo "=== 2. RUNNING PEDANTIC CLIPPY & DOC AUDITS ==="
           cargo clippy --all-targets -- -D warnings > unified_reports/clippy.log 2>&1 || true
           cargo doc --no-deps --document-private-items > unified_reports/cargo_doc.log 2>&1 || true
-          cppcheck --enable=all --error-exitcode=0 src/ > unified_reports/cppcheck.log 2>&1 || true
+          cppcheck --enable=all --suppress=missingIncludeSystem --suppress=unusedFunction --error-exitcode=0 src/ > unified_reports/cppcheck.log 2>&1 || true
 
       - name: Execute Native Max-Load Test Suite & Sanitizers
         if: matrix.target-arch == 'x86_64-unknown-linux-gnu'
@@ -97,10 +93,12 @@ jobs:
           cargo test --release --lib -- --nocapture > unified_reports/native_tests.log 2>&1
 
           echo "=== RUNNING THREADSANITIZER (TSAN) ==="
-          RUSTFLAGS="-Zsanitizer=thread" cargo test --release --lib --target x86_64-unknown-linux-gnu -Zbuild-std > unified_reports/tsan.log 2>&1 || true
+          RUSTFLAGS="-Zsanitizer=thread" cargo test --release --lib --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc > unified_reports/tsan.log 2>&1 || true
 
           echo "=== RUNNING ADDRESSSANITIZER (ASAN) ==="
-          RUSTFLAGS="-Zsanitizer=address" CC=clang CXX=clang++ cargo test --lib --target x86_64-unknown-linux-gnu -Zbuild-std > unified_reports/asan.log 2>&1 || true
+          export CC=clang
+          export CXX=clang++
+          RUSTFLAGS="-Zsanitizer=address" cargo test --lib --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc > unified_reports/asan.log 2>&1 || true
 
       - name: Execute High-Concurrency Python FFI Stress & Valgrind Heap Audit
         if: matrix.target-arch == 'x86_64-unknown-linux-gnu'
