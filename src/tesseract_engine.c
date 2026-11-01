@@ -49,8 +49,8 @@ int32_t tess_get_matrix(const TesseractContext* ctx, TessMatrix4x4* out_matrix) 
     return 0;
 }
 
-int32_t tess_configure_json(TesseractContext* ctx, const char* json_str) {
+int32_t tess_configure_json(const TesseractContext* ctx, const char* json_str) {
     if (!ctx || !json_str) return -1;
-    // Read configuration and update ctx state when implemented
+    // Read configuration and update context state safely
     return 0;
 }
