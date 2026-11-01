@@ -73,17 +73,17 @@ jobs:
           elif [ -f "target/release/libtesseract_rust.a" ]; then
             gcc -O3 -shared -fPIC -std=c11 -march=native \
               target/release/libtesseract_rust.a \
-              -o dist/${{ matrix.target-arch }}/libTessSDK.so -lm -lpthread || true
+              -o dist/${{ matrix.target-arch }}/libTessSDK.so -lm -lpthread
           else
             gcc -O3 -shared -fPIC -std=c11 -march=native \
-              -o dist/${{ matrix.target-arch }}/libTessSDK.so -lm -lpthread || true
+              -o dist/${{ matrix.target-arch }}/libTessSDK.so -lm -lpthread
           fi
 
       - name: Rigorous Binary, Symbol & ELF Audit
         run: |
           echo "=== AUDITING ARTIFACT FOR ${{ matrix.target-arch }} ==="
-          find dist/ -exec file {} \; || true
-          find dist/ -exec ls -lh {} \; || true
+          find dist/ -exec file {} \;
+          find dist/ -exec ls -lh {} \;
 
       - name: Upload Target Artifact
         uses: actions/upload-artifact@v4
@@ -109,7 +109,7 @@ jobs:
       - name: Perform Exported Symbol Integrity Audit
         run: |
           echo "=== AUDITING ABI EXPORTED SYMBOLS ==="
-          nm -D --defined-only libTessSDK.so || readelf -Ws libTessSDK.so || echo "Symbol audit logged."
+          nm -D --defined-only libTessSDK.so || readelf -Ws libTessSDK.so
 
   # STEP 3: SECURITY & DEPENDENCY SUPPLY-CHAIN AUDIT
   security-and-supply-chain-audit:
@@ -124,7 +124,7 @@ jobs:
 
       - name: Run Cargo Security Audit
         run: |
-          cargo audit || echo "Audit completed with status warnings."
+          cargo audit
 
   # STEP 4: THREADSANITIZER (TSAN) DATA RACE AUDIT
   thread-sanitizer-data-race-audit:
@@ -144,7 +144,7 @@ jobs:
           RUSTFLAGS: "-Zsanitizer=thread"
         run: |
           echo "=== RUNNING THREADSANITIZER DATA RACE AUDIT ==="
-          cargo test --lib --target x86_64-unknown-linux-gnu -Zbuild-std || echo "TSAN audit completed with warnings."
+          cargo test --lib --target x86_64-unknown-linux-gnu -Zbuild-std
 
   # STEP 5: MIRI UNDEFINED BEHAVIOR INTERPRETER AUDIT
   miri-undefined-behavior-audit:
@@ -162,7 +162,7 @@ jobs:
       - name: Run Miri Undefined Behavior & Pointer Safety Interpreter
         run: |
           echo "=== RUNNING MIRI UNDEFINED BEHAVIOR EVALUATION ==="
-          cargo miri test --lib || echo "Miri evaluation completed with warnings."
+          cargo miri test --lib
 
   # STEP 6: LOOM EXHAUSTIVE CONCURRENCY MODEL CHECK
   loom-exhaustive-concurrency-check:
@@ -183,7 +183,7 @@ jobs:
         run: |
           echo "=== RUNNING LOOM EXHAUSTIVE THREAD INTERLEAVING VERIFICATION ==="
           cargo test --test tesseract_comprehensive_suite test_loom_concurrency_interleaving \
-            --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc,std,panic_abort -Zbuild-std-features=panic_immediate_abort || echo "Loom check completed."
+            --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc,std,panic_abort -Zbuild-std-features=panic_immediate_abort
 
   # STEP 7: KANI FORMAL VERIFICATION & PROOF AUDIT
   kani-formal-verification-audit:
@@ -201,7 +201,7 @@ jobs:
       - name: Execute Kani Formal Proof Engine
         run: |
           echo "=== RUNNING KANI FORMAL VERIFICATION ENGINE ==="
-          cargo kani || echo "Kani formal verification completed."
+          cargo kani
 
   # STEP 8: MEMORYSANITIZER (MSAN) UNINITIALIZED READ AUDIT
   memory-sanitizer-msan-audit:
@@ -223,7 +223,7 @@ jobs:
           CXX: clang++
         run: |
           echo "=== RUNNING MEMORYSANITIZER (MSAN) UNINITIALIZED READ AUDIT ==="
-          cargo test --lib --target x86_64-unknown-linux-gnu -Zbuild-std || echo "MSan audit completed with warnings."
+          cargo test --lib --target x86_64-unknown-linux-gnu -Zbuild-std
 
   # STEP 9: QEMU FULL-SYSTEM TARGET EMULATION (ARM64)
   qemu-system-target-emulation:
@@ -240,7 +240,7 @@ jobs:
       - name: Execute Target Execution inside QEMU Environment
         run: |
           echo "=== EXECUTING QEMU ARM64 FULL-SYSTEM TARGET VERIFICATION ==="
-          qemu-aarch64-static --version || echo "QEMU ready."
+          qemu-aarch64-static --version
 
   # STEP 10: COMPREHENSIVE HARDWARE STRESS MATRIX & HWM CEILING
   comprehensive-hardware-stress-matrix:
@@ -270,8 +270,8 @@ jobs:
       - name: Verify Downloaded .so File Integrity
         run: |
           echo "=== VERIFYING DOWNLOADED SHARED OBJECT BINARY ==="
-          ls -lh libTessSDK.so || touch libTessSDK.so
-          file libTessSDK.so || true
+          ls -lh libTessSDK.so
+          file libTessSDK.so
 
       - name: Setup Comprehensive Test Harness Scaffolding
         run: |
@@ -296,23 +296,31 @@ jobs:
           echo "=== RUNNING PYTHON MULTI-THREADED FFI HARNESS ==="
           cat << 'EOF' > stress_harness.py
           import ctypes, os, threading, sys
+
           lib_path = "./libTessSDK.so"
           if not os.path.exists(lib_path):
-              print("Warning: libTessSDK.so not found, skipping Python FFI stress.")
-              sys.exit(0)
+              print("Error: libTessSDK.so not found!")
+              sys.exit(1)
+
           tess = ctypes.CDLL(lib_path)
+
           def worker():
-              for _ in range(1000):
-                  pass
+              for _ in range(500):
+                  try:
+                      if hasattr(tess, 'tess_get_version'):
+                          tess.tess_get_version()
+                  except Exception:
+                      pass
+
           threads = [threading.Thread(target=worker) for _ in range(16)]
           for t in threads: t.start()
           for t in threads: t.join()
           print("Python FFI Multi-Threaded Stress Completed Successfully.")
           EOF
-          python3 stress_harness.py || true
+          python3 stress_harness.py
 
       - name: Valgrind Deep Heap & Leak Sanitation Audit
         if: always()
         run: |
-          echo "=== RUNNING VALGRIND CUMULATIVE MEMORY CHECK ==="
-          valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=0 file libTessSDK.so || true
+          echo "=== RUNNING VALGRIND CUMULATIVE MEMORY CHECK ON FFI ==="
+          valgrind --leak-check=full --show-leak-kinds=all --error-exitcode=1 python3 stress_harness.py
