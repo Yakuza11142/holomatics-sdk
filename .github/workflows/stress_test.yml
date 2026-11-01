@@ -41,19 +41,28 @@ jobs:
         run: |
           mkdir -p .cargo
           cat << 'EOF' > .cargo/config.toml
+          [build]
+          target = "x86_64-unknown-linux-gnu"
+
+          [unstable]
+          build-std = ["core", "alloc"]
+
+          [target.x86_64-unknown-linux-gnu]
+          rustflags = ["-C", "panic=abort"]
+
           [target.wasm32-unknown-unknown]
           rustflags = ["-C", "panic=abort"]
           EOF
 
       - name: Execute Cumulative Compilation & Build Target -> ${{ matrix.target-arch }}
         env:
-          RUSTFLAGS: "${{ matrix.target-arch == 'x86_64-unknown-linux-gnu' && '-C target-cpu=native -C opt-level=3 -C codegen-units=1' || '-C opt-level=3 -C codegen-units=1 -C panic=abort' }}"
+          RUSTFLAGS: "-C opt-level=3 -C codegen-units=1 -C panic=abort"
         run: |
           echo "=== 1. COMPILING FOR TARGET: ${{ matrix.target-arch }} ==="
           if [ "${{ matrix.target-arch }}" = "wasm32-unknown-unknown" ]; then
-            cargo build --release --target wasm32-unknown-unknown
+            cargo build --release --target wasm32-unknown-unknown -Zbuild-std=core,alloc
           else
-            cargo build --release --lib
+            cargo build --release --lib -Zbuild-std=core,alloc
           fi
 
           if [ "${{ matrix.target-arch }}" = "wasm32-unknown-unknown" ]; then
@@ -84,19 +93,19 @@ jobs:
         if: matrix.target-arch == 'x86_64-unknown-linux-gnu'
         run: |
           echo "=== 3. RUNNING NATIVE TESTS & SANITIZERS ==="
-          cargo test --release --lib -- --nocapture > unified_reports/native_tests.log 2>&1 || {
+          cargo test --release --lib -Zbuild-std=core,alloc -- --nocapture > unified_reports/native_tests.log 2>&1 || {
             echo "❌ NATIVE TESTS FAILED. PRINTING LOG:"
             cat unified_reports/native_tests.log
             exit 1
           }
 
           echo "=== RUNNING THREADSANITIZER (TSAN) ==="
-          RUSTFLAGS="-Zsanitizer=thread" cargo test --release --lib --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc,std > unified_reports/tsan.log 2>&1 || true
+          RUSTFLAGS="-Zsanitizer=thread -C panic=abort" cargo test --release --lib --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc > unified_reports/tsan.log 2>&1 || true
 
           echo "=== RUNNING ADDRESSSANITIZER (ASAN) ==="
           export CC=clang
           export CXX=clang++
-          RUSTFLAGS="-Zsanitizer=address" cargo test --lib --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc,std > unified_reports/asan.log 2>&1 || true
+          RUSTFLAGS="-Zsanitizer=address -C panic=abort" cargo test --lib --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc > unified_reports/asan.log 2>&1 || true
 
       - name: Execute High-Concurrency Python FFI Stress & Valgrind Heap Audit
         if: matrix.target-arch == 'x86_64-unknown-linux-gnu'
