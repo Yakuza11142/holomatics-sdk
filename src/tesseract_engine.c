@@ -10,7 +10,7 @@ struct TesseractContext {
 TesseractContext* tess_create(void) {
     TesseractContext* ctx = (TesseractContext*)malloc(sizeof(TesseractContext));
     if (!ctx) return NULL;
-    
+
     ctx->frame_count = 0;
     // Initialize identity matrix
     memset(ctx->projection_matrix.m, 0, sizeof(float) * 16);
@@ -18,7 +18,7 @@ TesseractContext* tess_create(void) {
     ctx->projection_matrix.m[5] = 1.0f;
     ctx->projection_matrix.m[10] = 1.0f;
     ctx->projection_matrix.m[15] = 1.0f;
-    
+
     return ctx;
 }
 
@@ -43,7 +43,7 @@ int32_t tess_transform_vector(TesseractContext* ctx, const float* in_vec3, float
     return 0;
 }
 
-int32_t tess_get_matrix(TesseractContext* ctx, TessMatrix4x4* out_matrix) {
+int32_t tess_get_matrix(const TesseractContext* ctx, TessMatrix4x4* out_matrix) {
     if (!ctx || !out_matrix) return -1;
     memcpy(out_matrix, &ctx->projection_matrix, sizeof(TessMatrix4x4));
     return 0;
@@ -51,6 +51,6 @@ int32_t tess_get_matrix(TesseractContext* ctx, TessMatrix4x4* out_matrix) {
 
 int32_t tess_configure_json(TesseractContext* ctx, const char* json_str) {
     if (!ctx || !json_str) return -1;
-    // Read configuration without risking FFI type conversions
+    // Read configuration and update ctx state when implemented
     return 0;
 }
