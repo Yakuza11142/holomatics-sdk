@@ -16,7 +16,9 @@ opt-level = 0
 panic = "abort"
 
 [profile.test]
-panic = "abort"
+# MUST use unwind for standard cargo test harness
+panic = "unwind"
+opt-level = 0
 
 [profile.release]
 opt-level = 3
