@@ -6,3 +6,9 @@ linker = "aarch64-linux-android-clang"
 
 [unstable]
 build-std = ["core", "alloc"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
