@@ -11,6 +11,13 @@ crate-type = ["cdylib", "rlib", "staticlib"]
 [dependencies]
 # Zero-allocation dependencies can be added here
 
+[profile.dev]
+opt-level = 0
+panic = "abort"
+
+[profile.test]
+panic = "abort"
+
 [profile.release]
 opt-level = 3
 lto = true
