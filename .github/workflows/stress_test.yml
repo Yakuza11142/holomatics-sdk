@@ -179,11 +179,11 @@ jobs:
 
       - name: Execute Loom Model Checker for Exhaustive Thread Interleavings
         env:
-          RUSTFLAGS: "--cfg loom"
+          RUSTFLAGS: "--cfg loom -Cpanic=immediate-abort"
         run: |
           echo "=== RUNNING LOOM EXHAUSTIVE THREAD INTERLEAVING VERIFICATION ==="
           cargo test --test tesseract_comprehensive_suite test_loom_concurrency_interleaving \
-            --target x86_64-unknown-linux-gnu -Zunstable-options -Cpanic=immediate-abort -Zbuild-std=core,alloc,std
+            --target x86_64-unknown-linux-gnu -Zunstable-options -Zbuild-std=core,alloc,std
 
   # STEP 7: KANI FORMAL VERIFICATION & PROOF AUDIT
   kani-formal-verification-audit:
