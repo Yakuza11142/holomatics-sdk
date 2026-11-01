@@ -23,7 +23,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Rust Toolchain
+      - name: Set up Rust Toolchain (Nightly via toolchain file or fallback)
         run: |
           rustup update nightly
           rustup default nightly
@@ -39,120 +39,30 @@ jobs:
       - name: Initialize Unified Report Directory
         run: mkdir -p unified_reports dist/${{ matrix.target-arch }}
 
-      - name: Inject Sovereign Spatial Engine Core & Maximum-Stress Test Suites
+      - name: Ensure Project Configuration Files Exist (.cargo/config.toml & rust-toolchain.toml)
         run: |
-          mkdir -p tests src
-          
-          cat << 'EOF' > src/lib.rs
-          #![no_std]
-          extern crate alloc;
-          use alloc::vec::Vec;
+          mkdir -p .cargo
+          if [ ! -f ".cargo/config.toml" ]; then
+            cat << 'EOF' > .cargo/config.toml
+          [target.x86_64-unknown-linux-gnu]
+          linker = "cc"
 
-          pub struct Quaternion {
-              pub x: f32,
-              pub y: f32,
-              pub z: f32,
-              pub w: f32,
-          }
+          [target.aarch64-linux-android]
+          linker = "aarch64-linux-android-clang"
 
-          impl Quaternion {
-              pub const fn new(x: f32, y: f32, z: f32, w: f32) -> Self {
-                  Self { x, y, z, w }
-              }
-
-              pub fn normalize(&self) -> Self {
-                  let mag_sq = self.x * self.x + self.y * self.y + self.z * self.z + self.w * self.w;
-                  if mag_sq == 0.0 {
-                      return Self { x: 0.0, y: 0.0, z: 0.0, w: 1.0 };
-                  }
-                  let inv_mag = 1.0 / mag_sq.sqrt();
-                  Self {
-                      x: self.x * inv_mag,
-                      y: self.y * inv_mag,
-                      z: self.z * inv_mag,
-                      w: self.w * inv_mag,
-                  }
-              }
-          }
-
-          pub struct SpatialArena {
-              buffer: Vec<u8>,
-              offset: usize,
-          }
-
-          impl SpatialArena {
-              pub fn new(size: usize) -> Self {
-                  let mut buffer = Vec::with_capacity(size);
-                  unsafe { buffer.set_len(size); }
-                  Self { buffer, offset: 0 }
-              }
-
-              pub fn allocate(&mut self, bytes: usize) -> Option<*mut u8> {
-                  if self.offset + bytes > self.buffer.len() {
-                      None
-                  } else {
-                      let ptr = unsafe { self.buffer.as_mut_ptr().add(self.offset) };
-                      self.offset += bytes;
-                      Some(ptr)
-                  }
-              }
-          }
-
-          #[no_mangle]
-          pub extern "C" fn tess_get_version() -> u32 {
-              42
-          }
-
-          #[cfg(test)]
-          mod tests {
-              use super::*;
-
-              #[test]
-              fn test_quaternion_normalization_heavy() {
-                  for i in 1..50000 {
-                      let q = Quaternion::new(i as f32 * 0.01, (i as f32) * 0.005, (i as f32) * 0.0025, 1.0);
-                      let nq = q.normalize();
-                      let mag_sq = nq.x * nq.x + nq.y * nq.y + nq.z * nq.z + nq.w * nq.w;
-                      assert!((mag_sq - 1.0).abs() < 1e-4);
-                  }
-              }
-
-              #[test]
-              fn test_arena_allocation_exhaustion() {
-                  let mut arena = SpatialArena::new(2 * 1024 * 1024);
-                  for _ in 0..5000 {
-                      let ptr = arena.allocate(128);
-                      assert!(ptr.is_some());
-                  }
-              }
-          }
+          [unstable]
+          build-std = ["core", "alloc"]
           EOF
+          fi
 
-          cat << 'EOF' > tests/tesseract_comprehensive_suite.rs
-          use std::sync::atomic::{AtomicUsize, Ordering};
-          use std::sync::Arc;
-          use std::thread;
-
-          #[test]
-          fn test_concurrency_interleaving() {
-              let state = Arc::new(AtomicUsize::new(0));
-              let mut handles = vec![];
-
-              for _ in 0..8 {
-                  let s = Arc::clone(&state);
-                  handles.push(thread::spawn(move || {
-                      for _ in 0..2000 {
-                          s.fetch_add(1, Ordering::SeqCst);
-                      }
-                  }));
-              }
-
-              for h in handles {
-                  h.join().unwrap();
-              }
-              assert_eq!(state.load(Ordering::SeqCst), 16000);
-          }
+          if [ ! -f "rust-toolchain.toml" ]; then
+            cat << 'EOF' > rust-toolchain.toml
+          [toolchain]
+          channel = "nightly"
+          components = ["rust-src", "miri", "clippy"]
+          targets = ["x86_64-unknown-linux-gnu", "aarch64-linux-android", "wasm32-unknown-unknown"]
           EOF
+          fi
 
       - name: Execute Cumulative Compilation & Build Target -> ${{ matrix.target-arch }}
         run: |
@@ -214,8 +124,8 @@ jobs:
           def worker():
               for _ in range(10000):
                   try:
-                      if hasattr(tess, 'tess_get_version'):
-                          tess.tess_get_version()
+                      if hasattr(tess, 'tesseract_engine_version'):
+                          tess.tesseract_engine_version()
                   except Exception:
                       pass
           threads = [threading.Thread(target=worker) for _ in range(128)]
