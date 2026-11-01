@@ -6,7 +6,7 @@ edition = "2021"
 [lib]
 name = "tesseract_rust"
 path = "src/lib.rs"
-crate-type = ["staticlib", "rlib"]
+crate-type = ["cdylib", "rlib", "staticlib"]
 
 [dependencies]
 # Zero-allocation dependencies can be added here
