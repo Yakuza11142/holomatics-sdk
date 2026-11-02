@@ -93,19 +93,19 @@ jobs:
         if: matrix.target-arch == 'x86_64-unknown-linux-gnu'
         run: |
           echo "=== 3. RUNNING NATIVE TESTS & SANITIZERS ==="
-          cargo test --release --lib -Zbuild-std=core,alloc -Zpanic_abort_tests -- --nocapture > unified_reports/native_tests.log 2>&1 || {
+          RUSTFLAGS="-Zpanic_abort_tests" cargo test --release --lib -Zbuild-std=core,alloc -- --nocapture > unified_reports/native_tests.log 2>&1 || {
             echo "❌ NATIVE TESTS FAILED. PRINTING LOG:"
             cat unified_reports/native_tests.log
             exit 1
           }
 
           echo "=== RUNNING THREADSANITIZER (TSAN) ==="
-          RUSTFLAGS="-Zsanitizer=thread -C panic=abort" cargo test --release --lib --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc -Zpanic_abort_tests > unified_reports/tsan.log 2>&1 || true
+          RUSTFLAGS="-Zsanitizer=thread -C panic=abort -Zpanic_abort_tests" cargo test --release --lib --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc > unified_reports/tsan.log 2>&1 || true
 
           echo "=== RUNNING ADDRESSSANITIZER (ASAN) ==="
           export CC=clang
           export CXX=clang++
-          RUSTFLAGS="-Zsanitizer=address -C panic=abort" cargo test --lib --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc -Zpanic_abort_tests > unified_reports/asan.log 2>&1 || true
+          RUSTFLAGS="-Zsanitizer=address -C panic=abort -Zpanic_abort_tests" cargo test --lib --target x86_64-unknown-linux-gnu -Zbuild-std=core,alloc > unified_reports/asan.log 2>&1 || true
 
       - name: Execute High-Concurrency Python FFI Stress & Valgrind Heap Audit
         if: matrix.target-arch == 'x86_64-unknown-linux-gnu'
